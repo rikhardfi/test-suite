@@ -5,6 +5,7 @@ import {
   encodeRecords,
   isClosed,
   lastSampleTime,
+  rawFromRecords,
   recordsToSession,
   sessionToRecords,
   summarise,
@@ -311,5 +312,86 @@ describe('journal against the runner', () => {
     expect(truncated).toBe(false)
     expect(fromJournal).toEqual(inMemory)
     expect(fromJournal!.samples.length).toBeGreaterThan(90)
+  })
+})
+
+describe('the native-rate stream', () => {
+  it('round-trips raw notifications and beat intervals', () => {
+    const records: JournalRecord[] = [
+      header(),
+      { type: 'raw', d: 'strap', at: 1_760_000_000_100, t: 0.1, v: { heartRate: 132 } },
+      { type: 'rr', at: 1_760_000_000_100, t: 0.1, ms: [812, 799] },
+      { type: 'raw', d: 'trainer', at: 1_760_000_000_350, t: 0.35, v: { power: 241, cadence: 92 } },
+    ]
+    const decoded = decodeJournal(encodeRecords(records))
+    expect(decoded.malformed).toBe(0)
+    expect(decoded.records).toEqual(records)
+  })
+
+  /**
+   * The raw stream is an order of magnitude larger than the sample stream, so
+   * the path every other read goes through must not carry it.
+   */
+  it('keeps raw records out of the reconstructed session', () => {
+    const records: JournalRecord[] = [
+      header(),
+      { type: 'sample', t: 0, stepIndex: 0, phase: 'work', power: 200 },
+      { type: 'raw', d: 'trainer', at: 1_760_000_000_250, t: 0.25, v: { power: 204 } },
+      { type: 'rr', at: 1_760_000_000_250, t: 0.25, ms: [790] },
+    ]
+    const session = recordsToSession(records)
+    expect(session?.samples).toHaveLength(1)
+    expect(session?.rr).toEqual([{ t: 0.25, ms: [790] }])
+    expect(rawFromRecords(records)).toHaveLength(1)
+  })
+
+  it('counts only samples in the summary, not raw records', () => {
+    const records: JournalRecord[] = [
+      header(),
+      { type: 'sample', t: 0, stepIndex: 0, phase: 'work' },
+      { type: 'raw', d: 'trainer', at: 1, t: 0.5, v: { power: 200 } },
+      { type: 'raw', d: 'trainer', at: 2, t: 0.75, v: { power: 201 } },
+    ]
+    expect(summarise(records)?.sampleCount).toBe(1)
+  })
+})
+
+describe('reading a journal written by another build', () => {
+  /**
+   * A v1 journal has no raw records and a narrower Sample. It has to read, or
+   * upgrading the app would strand every session already on disk.
+   */
+  it('reads a version 1 journal', () => {
+    const v1 = [
+      '{"type":"header","v":1,"id":"old","startedAt":1760000000000,"protocolId":"p","protocolName":"Old","sport":"bike","athlete":{"name":"A","massKg":75,"ftpWatts":300}}',
+      '{"type":"sample","t":0,"stepIndex":0,"phase":"work","power":200,"heartRate":140}',
+      '{"type":"closed","endedAt":1760000001000,"sampleCount":1}',
+      '',
+    ].join('\n')
+    const decoded = decodeJournal(v1)
+    expect(decoded.malformed).toBe(0)
+    const session = recordsToSession(decoded.records)
+    expect(session?.samples[0].power).toBe(200)
+    expect(session?.samples[0].inclinePct).toBeUndefined()
+    expect(session?.rr).toBeUndefined()
+  })
+
+  /**
+   * The reverse skew: a field this build has never heard of must not cost the
+   * whole line. Losing a recorded sample to a version difference is the one
+   * outcome the journal exists to prevent.
+   */
+  it('keeps a record carrying fields it does not know', () => {
+    const future =
+      '{"type":"sample","t":3,"stepIndex":0,"phase":"work","power":210,"somethingNew":42}\n'
+    const decoded = decodeJournal(future)
+    expect(decoded.malformed).toBe(0)
+    expect(decoded.records).toHaveLength(1)
+    expect((decoded.records[0] as { power?: number }).power).toBe(210)
+  })
+
+  it('still rejects a line that is not a journal record at all', () => {
+    expect(decodeJournal('{"type":"nonsense"}\n').malformed).toBe(1)
+    expect(decodeJournal('not json\n').malformed).toBe(1)
   })
 })

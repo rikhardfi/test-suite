@@ -16,11 +16,15 @@ const bridge: TestdayBridge = {
   paths: () => ipcRenderer.invoke(IPC.paths),
   chooseMirrorFolder: () => ipcRenderer.invoke(IPC.chooseMirror),
   setMirrorFolder: (path) => ipcRenderer.invoke(IPC.setMirror, path),
+  setConfirmQuitWhenIdle: (on) => ipcRenderer.invoke(IPC.setConfirmQuit, on),
+  revealLog: () => ipcRenderer.invoke(IPC.revealLog),
 
   begin: (header) => ipcRenderer.invoke(IPC.begin, header),
   appendSample: (sample) => ipcRenderer.send(IPC.appendSample, sample),
   appendLactate: (entry) => ipcRenderer.send(IPC.appendLactate, entry),
   appendEvent: (event) => ipcRenderer.send(IPC.appendEvent, event),
+  appendRaw: (raw) => ipcRenderer.send(IPC.appendRaw, raw),
+  appendRr: (rr) => ipcRenderer.send(IPC.appendRr, rr),
   close: (endedAt) => ipcRenderer.invoke(IPC.close, endedAt),
 
   list: () => ipcRenderer.invoke(IPC.list),

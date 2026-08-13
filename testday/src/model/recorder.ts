@@ -2,6 +2,7 @@ import { JOURNAL_VERSION } from './journal'
 import type { JournalEventKind, JournalHeader, SessionSummary } from './journal'
 import type { LactateEntry, Sample, SessionRecord } from './session'
 import type { Protocol, Athlete } from './protocol'
+import type { MetricKey } from '../ble/types'
 
 /**
  * Where a session goes while it is being recorded, and where finished ones are
@@ -22,6 +23,14 @@ export interface Recorder {
   sample(sample: Sample): void
   lactate(entry: LactateEntry): void
   event(kind: JournalEventKind, data?: Record<string, number | string | boolean>): void
+  /**
+   * One decoded notification at its native rate. Fire-and-forget and
+   * deliberately cheap: this is the highest-volume call in the app, and it must
+   * never be able to delay the 1 Hz sample it sits underneath.
+   */
+  raw(deviceId: string, t: number, values: Partial<Record<MetricKey, number>>): void
+  /** Beat-to-beat intervals, which arrive per beat rather than per second. */
+  rr(t: number, intervalsMs: number[]): void
   /** Returns how many verified copies of the recording now exist. */
   finish(endedAt: number): Promise<FinishResult>
 

@@ -79,6 +79,16 @@ export function createFileRecorder(bridge: TestdayBridge): Recorder {
       queue(() => bridge.appendEvent({ kind, at, data }))
     },
 
+    raw(deviceId: string, t: number, values) {
+      const at = Date.now()
+      queue(() => bridge.appendRaw({ d: deviceId, at, t, v: values }))
+    },
+
+    rr(t: number, intervalsMs: number[]) {
+      const at = Date.now()
+      queue(() => bridge.appendRr({ at, t, ms: intervalsMs }))
+    },
+
     async finish(endedAt: number): Promise<FinishResult> {
       const result = await bridge.close(endedAt)
       recording = false

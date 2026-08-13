@@ -955,3 +955,43 @@ tr.done td {
 .nowrap {
   white-space: nowrap;
 }
+
+/* A panel that stopped drawing, in place of the panel. Deliberately quiet: the
+   test is still running and this must not read as an emergency. */
+.panel-error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bad) 6%, transparent);
+}
+
+.app-error {
+  max-width: 46rem;
+  margin: 12vh auto;
+  padding: 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+}
+.app-error h1 {
+  margin: 0;
+}
+
+/* Checkbox rows read as a sentence, so the box sits inline with the label
+   rather than stacking above it the way the field-grid labels do. */
+label.check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+label.check input {
+  width: auto;
+  margin: 0;
+}

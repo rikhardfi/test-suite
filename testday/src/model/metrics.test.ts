@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { MmpTracker, RollingAverage, formatClock, mmpCurve, normalizedPower, paceFromSpeed } from './metrics'
+import {
+  MmpTracker,
+  RollingAverage,
+  formatClock,
+  hrv,
+  mmpCurve,
+  normalizedPower,
+  paceFromSpeed,
+} from './metrics'
 
 describe('RollingAverage', () => {
   it('averages only the trailing window', () => {
@@ -68,5 +76,37 @@ describe('formatting', () => {
   it('formats running pace per kilometre', () => {
     expect(paceFromSpeed(1000 / 240)).toBe('4:00')
     expect(paceFromSpeed(0)).toBe('—')
+  })
+})
+
+describe('hrv', () => {
+  /** Every interval identical, so there is no variability to find. */
+  it('is zero for a perfectly regular series', () => {
+    const result = hrv(Array.from({ length: 30 }, () => 1000))
+    expect(result?.rmssd).toBeCloseTo(0, 9)
+    expect(result?.sdnn).toBeCloseTo(0, 9)
+    expect(result?.meanHr).toBeCloseTo(60, 6)
+  })
+
+  it('computes rMSSD from successive differences', () => {
+    // Alternating 900/1000 gives a difference of 100 ms at every step.
+    const alternating = Array.from({ length: 30 }, (_, i) => (i % 2 === 0 ? 900 : 1000))
+    expect(hrv(alternating)?.rmssd).toBeCloseTo(100, 6)
+  })
+
+  /**
+   * Straps emit impossible intervals when they miss a beat, and a single one
+   * of them would dominate rMSSD. They are dropped rather than clamped.
+   */
+  it('drops physiologically impossible intervals', () => {
+    const clean = Array.from({ length: 30 }, () => 1000)
+    const dirty = [...clean, 40, 5000]
+    expect(hrv(dirty)?.beats).toBe(30)
+    expect(hrv(dirty)?.rmssd).toBeCloseTo(0, 9)
+  })
+
+  it('refuses to answer on too few beats', () => {
+    expect(hrv(Array.from({ length: 19 }, () => 1000))).toBeNull()
+    expect(hrv([])).toBeNull()
   })
 })

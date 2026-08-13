@@ -189,6 +189,33 @@ function StorageSettings() {
           No second copy is configured. A single disk failure would take the recordings with it.
         </p>
       )}
+
+      <h3>Quitting</h3>
+      <p className="muted small">
+        Quitting while a session is recording always asks first, and that is not optional. This
+        covers the rest of the time.
+      </p>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={paths?.confirmQuitWhenIdle ?? true}
+          onChange={(e) => void bridge.setConfirmQuitWhenIdle(e.target.checked).then(setPaths)}
+        />
+        Ask before quitting even when nothing is recording
+      </label>
+
+      <h3>Diagnostics</h3>
+      <p className="muted small">
+        A log of what the app did: sessions opened and closed, sensors connecting and dropping,
+        failed writes, crashes. No athlete names and no measurements go into it, so it is safe to
+        send on when something has gone wrong.
+      </p>
+      <div className="row">
+        <input readOnly value={paths?.logFile ?? '…'} />
+        <button className="ghost nowrap" onClick={() => void bridge.revealLog()}>
+          Show log
+        </button>
+      </div>
     </section>
   )
 }

@@ -1,5 +1,6 @@
 import type { Athlete, Protocol } from './protocol'
-import type { LactateEntry, Sample, SessionRecord } from './session'
+import type { LactateEntry, RrEntry, Sample, SessionRecord } from './session'
+import type { MetricKey } from '../ble/types'
 
 /**
  * The on-disk recording format: one JSON object per line, appended and fsynced
@@ -16,7 +17,13 @@ import type { LactateEntry, Sample, SessionRecord } from './session'
  *    only signal the resume flow needs, so there is no lock file to go stale.
  */
 
-export const JOURNAL_VERSION = 1
+/**
+ * 1: samples, lactate, events, close, reopen.
+ * 2: adds `raw` and `rr`, and widens `Sample` with gradient, distance,
+ *    resistance, commanded gradient and the VO₂ estimate. Readers must tolerate
+ *    both, which `parseRecord` does by not validating beyond the record kind.
+ */
+export const JOURNAL_VERSION = 2
 
 /** Sport, protocol and athlete, so a record can be rebuilt from the file alone. */
 export interface JournalHeader {
@@ -37,6 +44,8 @@ export type JournalEventKind =
   | 'jump'
   | 'intensity'
   | 'resumedFromDisk'
+  /** A metric changed hands between devices, or started or stopped arriving. */
+  | 'sourceChanged'
 
 export interface JournalEvent {
   type: 'event'
@@ -63,6 +72,42 @@ export interface JournalReopen {
 }
 
 /**
+ * One decoded notification, written at whatever rate the sensor sends it.
+ *
+ * The 1 Hz `sample` stream stays the app's working record: it is what the
+ * dashboard, the lap table and every export read, and it is regular, which
+ * makes it analysable. This is the layer underneath it, kept because a sensor
+ * that reports four times a second is throwing away three quarters of what it
+ * measured the moment anything downsamples it, and because resampling every
+ * channel up to a common rate would invent values that were never measured.
+ *
+ * Keys are short on purpose. These lines outnumber every other kind in the file.
+ */
+export interface JournalRaw {
+  type: 'raw'
+  /** Device that sent it. */
+  d: string
+  /** Wall clock, milliseconds. */
+  at: number
+  /** Seconds since the session started, so it aligns with the sample stream. */
+  t: number
+  /** Exactly what that one notification decoded to, nothing merged in. */
+  v: Partial<Record<MetricKey, number>>
+}
+
+/**
+ * Beat-to-beat intervals. Their own record kind rather than a sample field
+ * because they arrive per beat, several at a time, and at no fixed rate.
+ */
+export interface JournalRr {
+  type: 'rr'
+  at: number
+  t: number
+  /** Intervals in milliseconds, in the order the strap reported them. */
+  ms: number[]
+}
+
+/**
  * Samples and lactate entries are stored flat rather than nested, because the
  * operator reads this file with `tail -f` during a test. Neither `Sample` nor
  * `LactateEntry` has a `type` key, so there is nothing to collide with.
@@ -74,6 +119,8 @@ export type JournalRecord =
   | JournalEvent
   | JournalClose
   | JournalReopen
+  | JournalRaw
+  | JournalRr
 
 export interface DecodedJournal {
   records: JournalRecord[]
@@ -127,18 +174,24 @@ function parseRecord(line: string): JournalRecord | null {
   }
   if (typeof value !== 'object' || value === null) return null
   const type = (value as { type?: unknown }).type
-  if (
-    type !== 'header' &&
-    type !== 'sample' &&
-    type !== 'lactate' &&
-    type !== 'event' &&
-    type !== 'closed' &&
-    type !== 'reopened'
-  ) {
-    return null
-  }
+  // Only the record kind is checked. Fields are deliberately not validated: a
+  // journal written by an older or newer build must still read, and dropping a
+  // whole line because it carries a field this build has not heard of would
+  // lose recorded data to a version skew.
+  if (typeof type !== 'string' || !KNOWN_RECORD_TYPES.has(type)) return null
   return value as JournalRecord
 }
+
+const KNOWN_RECORD_TYPES = new Set([
+  'header',
+  'sample',
+  'lactate',
+  'event',
+  'closed',
+  'reopened',
+  'raw',
+  'rr',
+])
 
 export const headerOf = (records: readonly JournalRecord[]): JournalHeader | null =>
   (records.find((r) => r.type === 'header') as JournalHeader | undefined) ?? null
@@ -178,6 +231,7 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
   if (!header) return null
 
   const samples: Sample[] = []
+  const rr: RrEntry[] = []
   // Insertion-ordered, so a corrected value keeps the position of the original.
   const lactate = new Map<number, LactateEntry>()
   let endedAt: number | undefined
@@ -189,6 +243,9 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
         samples.push(sample)
         break
       }
+      case 'rr':
+        rr.push({ t: record.t, ms: record.ms })
+        break
       case 'lactate': {
         const { type: _type, ...entry } = record
         // Last write wins, the same way `TestRunner.recordLactate` behaves in
@@ -219,8 +276,19 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
     endedAt,
     samples,
     lactate: [...lactate.values()].filter((entry) => !entry.removed),
+    rr: rr.length ? rr : undefined,
   }
 }
+
+/**
+ * The native-rate stream, read separately.
+ *
+ * Deliberately not part of `recordsToSession`: it is an order of magnitude
+ * larger than the sample stream, and the paths that read many sessions at once
+ * (the all-time best curve, the session list) want nothing to do with it.
+ */
+export const rawFromRecords = (records: readonly JournalRecord[]): JournalRaw[] =>
+  records.filter((record): record is JournalRaw => record.type === 'raw')
 
 /** The reverse, for migrating sessions that were recorded into IndexedDB. */
 export function sessionToRecords(session: SessionRecord): JournalRecord[] {

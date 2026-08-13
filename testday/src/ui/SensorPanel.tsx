@@ -135,6 +135,16 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
                   </td>
                   <td>{device.batteryPct != null ? `${device.batteryPct}%` : '—'}</td>
                   <td>
+                    {device.state !== 'connected' && (
+                      <button
+                        className="ghost"
+                        onClick={() => manager.retry(device.id)}
+                        disabled={device.state === 'reconnecting'}
+                        title="Try this device again now, without waiting for the next backoff"
+                      >
+                        {device.state === 'reconnecting' ? 'Reconnecting…' : 'Retry'}
+                      </button>
+                    )}
                     <button className="ghost" onClick={() => manager.remove(device.id)}>
                       Remove
                     </button>

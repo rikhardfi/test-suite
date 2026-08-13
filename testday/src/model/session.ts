@@ -11,6 +11,7 @@ import {
   type Step,
 } from './protocol'
 import { max, mean } from './metrics'
+import { estimateVo2, type Vo2Method } from './vo2'
 import type { MachineControl, MetricUpdate } from '../ble/types'
 
 export type RunnerState = 'idle' | 'running' | 'paused' | 'finished'
@@ -27,8 +28,31 @@ export interface Sample {
   heartRate?: number
   cadence?: number
   speedMs?: number
+  /**
+   * Treadmill gradient in percent. The machine's own reading when it sends one;
+   * otherwise the value the runner commanded, flagged below. Kept because it is
+   * the second argument to every running metabolic equation, so a session
+   * recorded without it cannot have its oxygen cost reconstructed afterwards.
+   */
+  inclinePct?: number
+  /** Set only when `inclinePct` is the commanded value, not a measured one. */
+  inclineFromTarget?: true
+  /** Distance in metres, preferring the machine's own odometer. */
+  distanceM?: number
+  /** Set only when `distanceM` was integrated from speed rather than reported. */
+  distanceIntegrated?: true
+  /** Trainer resistance level, which is what the athlete works against off ERG. */
+  resistance?: number
   targetPower?: number
   targetKph?: number
+  targetInclinePct?: number
+  /**
+   * Estimated oxygen cost, mL/kg/min, with the equation that produced it. An
+   * estimate exported without its method is indistinguishable from a
+   * measurement, so the two are always written together or not at all.
+   */
+  vo2Est?: number
+  vo2Method?: Vo2Method
   /** CORE sensor, when one is connected. Recorded with its own quality flag. */
   coreTempC?: number
   skinTempC?: number
@@ -55,6 +79,12 @@ export interface LactateEntry {
   removed?: boolean
 }
 
+/** Beat-to-beat intervals as they were reported, timestamped on the session clock. */
+export interface RrEntry {
+  t: number
+  ms: number[]
+}
+
 export interface SessionRecord {
   id: string
   protocolId: string
@@ -65,6 +95,8 @@ export interface SessionRecord {
   endedAt?: number
   samples: Sample[]
   lactate: LactateEntry[]
+  /** Present when a strap reported them. Not resampled onto the 1 Hz clock. */
+  rr?: RrEntry[]
   notes?: string
 }
 
@@ -115,7 +147,17 @@ export interface RunnerOptions {
    */
   onSample?: (sample: Sample) => void
   onLactate?: (entry: LactateEntry) => void
+  /**
+   * Fired for every operator action that changes how the protocol is being
+   * executed. Recorded because the protocol as written and the protocol as run
+   * diverge the moment anyone trims intensity or skips a stage, and afterwards
+   * only the journal can say which happened.
+   */
+  onEvent?: (kind: RunnerEventKind, data?: Record<string, number | string | boolean>) => void
 }
+
+/** Operator actions worth putting in the journal. */
+export type RunnerEventKind = 'start' | 'pause' | 'resume' | 'jump' | 'intensity'
 
 const TICK_MS = 200
 const SAMPLE_INTERVAL_S = 1
@@ -139,6 +181,7 @@ export class TestRunner {
   private readonly onStart?: (startedAt: number) => void
   private readonly onSample?: (sample: Sample) => void
   private readonly onLactate?: (entry: LactateEntry) => void
+  private readonly onEvent?: RunnerOptions['onEvent']
 
   private timer: ReturnType<typeof setInterval> | null = null
   private lastTickAt = 0
@@ -158,6 +201,8 @@ export class TestRunner {
   private samples: Sample[] = []
   private lactate: LactateEntry[] = []
   private startedAt = 0
+  /** Fallback odometer, used only when the machine reports no distance. */
+  private integratedDistanceM = 0
 
   private listeners = new Set<() => void>()
 
@@ -170,6 +215,7 @@ export class TestRunner {
     this.onStart = options.onStart
     this.onSample = options.onSample
     this.onLactate = options.onLactate
+    this.onEvent = options.onEvent
   }
 
   subscribe(fn: () => void): () => void {
@@ -186,13 +232,15 @@ export class TestRunner {
 
   start(): void {
     if (this.state === 'running') return
-    if (this.state === 'idle') {
+    const first = this.state === 'idle'
+    if (first) {
       this.startedAt = Date.now()
       // Announced before the first sample can be taken, so the recorder has a
       // journal open by the time one arrives.
       this.onStart?.(this.startedAt)
       void this.machine()?.start().catch(() => undefined)
     }
+    this.onEvent?.(first ? 'start' : 'resume', { stepIndex: this.stepIndex })
     this.state = 'running'
     this.lastTickAt = this.now()
     if (!this.timer) this.timer = setInterval(() => this.tick(), TICK_MS)
@@ -202,6 +250,7 @@ export class TestRunner {
   pause(): void {
     if (this.state !== 'running') return
     this.state = 'paused'
+    this.onEvent?.('pause', { stepIndex: this.stepIndex, elapsedS: Math.round(this.elapsedS) })
     this.emit()
   }
 
@@ -213,6 +262,9 @@ export class TestRunner {
   finish(): void {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    if (this.state === 'running') {
+      this.onEvent?.('pause', { stepIndex: this.stepIndex, elapsedS: Math.round(this.elapsedS) })
+    }
     this.state = 'finished'
     void this.machine()?.stop().catch(() => undefined)
     this.emit()
@@ -246,6 +298,9 @@ export class TestRunner {
 
     this.elapsedS = last.t
     this.nextSampleAt = last.t + SAMPLE_INTERVAL_S
+    // Pick the odometer up where it stopped, so a resumed session does not
+    // restart its distance at zero halfway through.
+    this.integratedDistanceM = last.distanceM ?? 0
 
     // Walk the protocol to find which step that elapsed time lands in.
     let remaining = this.elapsedS
@@ -295,6 +350,7 @@ export class TestRunner {
     this.stepElapsedS = 0
     this.lastSentWatts = null
     this.lastSentKph = null
+    this.onEvent?.('jump', { stepIndex: this.stepIndex, elapsedS: Math.round(this.elapsedS) })
     this.emit()
   }
 
@@ -310,9 +366,15 @@ export class TestRunner {
   }
 
   setIntensity(pct: number): void {
-    this.intensity = Math.min(1.5, Math.max(0.5, pct / 100))
+    const next = Math.min(1.5, Math.max(0.5, pct / 100))
+    if (next === this.intensity) return
+    this.intensity = next
     this.lastSentWatts = null
     this.lastSentKph = null
+    this.onEvent?.('intensity', {
+      pct: Math.round(this.intensity * 100),
+      stepIndex: this.stepIndex,
+    })
     this.emit()
   }
 
@@ -381,6 +443,30 @@ export class TestRunner {
   private record(t: number): void {
     const metrics = this.readMetrics()
     const step = this.currentStep
+
+    // Distance comes from the machine's own odometer when it has one, because
+    // that is the number on the display in front of the athlete. Integrating
+    // speed is the fallback, and it is flagged, because the two drift apart
+    // over a long test and afterwards nobody can tell which they are reading.
+    this.integratedDistanceM += (metrics.speedMs ?? 0) * SAMPLE_INTERVAL_S
+    const machineDistance = metrics.distanceM
+    const integrated = machineDistance == null
+
+    // A treadmill that reports its gradient is believed. One that does not is
+    // assumed to be at the gradient it was commanded to, which is true whenever
+    // the command succeeded, and flagged so a later reader can see the
+    // difference between a measurement and an assumption.
+    const commandedIncline = step ? stepInclinePct(step) : null
+    const measuredIncline = metrics.inclinePct
+    const inclinePct = measuredIncline ?? commandedIncline ?? undefined
+
+    const speedKph = metrics.speedMs == null ? undefined : metrics.speedMs * 3.6
+    const estimate = estimateVo2(
+      this.protocol.sport,
+      { speedKph, inclinePct, watts: metrics.power },
+      this.athlete,
+    )
+
     const sample: Sample = {
       t: Math.round(t),
       stepIndex: this.stepIndex,
@@ -389,8 +475,16 @@ export class TestRunner {
       heartRate: metrics.heartRate,
       cadence: metrics.cadence,
       speedMs: metrics.speedMs,
+      inclinePct,
+      inclineFromTarget: inclinePct != null && measuredIncline == null ? true : undefined,
+      distanceM: machineDistance ?? Number(this.integratedDistanceM.toFixed(1)),
+      distanceIntegrated: integrated ? true : undefined,
+      resistance: metrics.resistance,
       targetPower: step ? this.targetPower ?? undefined : undefined,
       targetKph: step ? this.targetKph ?? undefined : undefined,
+      targetInclinePct: commandedIncline ?? undefined,
+      vo2Est: estimate ? Number(estimate.vo2.toFixed(2)) : undefined,
+      vo2Method: estimate?.method,
       // Recorded exactly as reported, quality included. Judging a reading is
       // something to do afterwards with the quality flag in hand, not
       // something to do by silently dropping it now.
@@ -516,6 +610,18 @@ export class TestRunner {
       controlError: this.controlError,
     }
     return this.cachedSnapshot
+  }
+
+  /**
+   * Seconds on the session clock right now.
+   *
+   * The native-rate stream timestamps itself against this rather than against
+   * the wall clock, so a notification that arrives while the test is paused is
+   * filed at the second the test was paused at, and the two streams stay
+   * alignable. Wall-clock time travels separately on each record.
+   */
+  get elapsed(): number {
+    return this.elapsedS
   }
 
   get recordedSamples(): readonly Sample[] {

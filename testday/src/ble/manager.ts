@@ -108,21 +108,43 @@ const KIND_PRIORITY: Record<MetricKey, DeviceKind[]> = {
 /** A value older than this is not shown, so a dropped sensor blanks out. */
 const STALE_MS = 5000
 
+/** Attempts before giving up on a device when no session is being recorded. */
+const IDLE_RECONNECT_ATTEMPTS = 12
+const MAX_BACKOFF_MS = 15000
+
+/** One metric changing hands, from one device to another or to nothing. */
+export interface SourceChange {
+  metric: MetricKey
+  from: string | null
+  to: string | null
+  toName: string | null
+}
+
+export type SourceChangeListener = (changes: readonly SourceChange[]) => void
+
 interface Entry {
   device: SensorDevice
   values: Map<MetricKey, { value: number; at: number }>
   rrIntervalsMs?: number[]
   gattDevice?: BluetoothDevice
   ftms?: FtmsControl
+  /** Held so a device can be reconnected without the caller supplying it again. */
+  profile?: SensorProfile
+  reconnectAttempts?: number
 }
 
 export class SensorManager {
   private entries = new Map<string, Entry>()
   private listeners = new Set<() => void>()
   private metricListeners = new Set<MetricListener>()
+  private sourceListeners = new Set<SourceChangeListener>()
+  /** Which device last won each metric, for spotting the moment it changes. */
+  private lastSources = new Map<MetricKey, string | null>()
   /** Explicit user override of which device owns a metric. */
   private preferred = new Map<MetricKey, string>()
   private wheelCircumferenceM = 2.096
+  /** True while a session is recording, which is when sensors are chased hardest. */
+  private recording = false
 
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn)
@@ -184,14 +206,40 @@ export class SensorManager {
     return best?.device ?? null
   }
 
+  /**
+   * Registers interest in which device currently owns a metric.
+   *
+   * Arbitration can switch mid-test, when a chest strap drops and a trainer's
+   * own heart rate estimate takes over. The numbers keep arriving and nothing
+   * about the trace says the source changed, which is exactly the kind of thing
+   * that is impossible to reconstruct afterwards. Listeners are told so it can
+   * be recorded.
+   */
+  onSourceChange(fn: SourceChangeListener): () => void {
+    this.sourceListeners.add(fn)
+    return () => this.sourceListeners.delete(fn)
+  }
+
   /** Merged live snapshot across all connected sensors. */
   read(now = Date.now()): MetricUpdate {
     const out: MetricUpdate = {}
+    const changes: SourceChange[] = []
     for (const metric of Object.keys(KIND_PRIORITY) as MetricKey[]) {
       const device = this.sourceFor(metric, now)
+      const previous = this.lastSources.get(metric) ?? null
+      const currentId = device?.id ?? null
+      if (currentId !== previous) {
+        this.lastSources.set(metric, currentId)
+        // The very first resolution of a metric is a change from nothing, and
+        // is worth recording too: it says when a sensor started contributing.
+        changes.push({ metric, from: previous, to: currentId, toName: device?.name ?? null })
+      }
       if (!device) continue
       const held = this.entries.get(device.id)?.values.get(metric)
       if (held) out[metric] = held.value
+    }
+    if (changes.length) {
+      for (const fn of this.sourceListeners) fn(changes)
     }
     const hrEntry = this.sourceFor('heartRate', now)
     const rr = hrEntry ? this.entries.get(hrEntry.id)?.rrIntervalsMs : undefined
@@ -255,7 +303,7 @@ export class SensorManager {
       },
     }
 
-    const entry: Entry = { device: sensor, values: new Map(), gattDevice: device }
+    const entry: Entry = { device: sensor, values: new Map(), gattDevice: device, profile }
     this.entries.set(id, entry)
     this.emit()
 
@@ -280,23 +328,62 @@ export class SensorManager {
     return sensor
   }
 
-  /** Reconnects with backoff until the device returns or is removed. */
+  /**
+   * Reconnects with capped backoff.
+   *
+   * Never gives up while a session is recording. A strap that drops out at
+   * minute five of a forty-five minute test used to be gone for the rest of it,
+   * because the attempts ran out long before the test did. Outside a recording
+   * the attempts are bounded, so a device left switched off does not have
+   * something retrying at it all day.
+   */
   private async reconnect(entry: Entry, profile: SensorProfile): Promise<void> {
-    for (let attempt = 0; attempt < 12; attempt++) {
+    for (let attempt = 0; ; attempt++) {
       if (!this.entries.has(entry.device.id)) return
-      await delay(Math.min(1000 * 2 ** attempt, 15000))
+      if (attempt >= IDLE_RECONNECT_ATTEMPTS && !this.recording) break
+      entry.reconnectAttempts = attempt + 1
+      await delay(Math.min(1000 * 2 ** Math.min(attempt, 4), MAX_BACKOFF_MS))
       if (!this.entries.has(entry.device.id)) return
       try {
         await this.openSession(entry, profile)
         entry.device.state = 'connected'
+        entry.reconnectAttempts = 0
         this.emit()
         return
       } catch {
         // Device still out of range; keep trying.
+        this.emit()
       }
     }
     entry.device.state = 'disconnected'
     this.emit()
+  }
+
+  /**
+   * Told by the app whether a session is being recorded, which is the only
+   * thing that decides how hard a dropped sensor is chased.
+   */
+  setRecording(recording: boolean): void {
+    this.recording = recording
+    if (!recording) return
+    // Anything that gave up while idle gets another run at it now that a test
+    // has started, which is exactly when the operator needs it back.
+    for (const entry of this.entries.values()) {
+      if (entry.device.state !== 'disconnected' || !entry.profile) continue
+      entry.device.state = 'reconnecting'
+      void this.reconnect(entry, entry.profile)
+    }
+    this.emit()
+  }
+
+  /** Manual retry, for the button in the sensor panel. */
+  retry(deviceId: string): void {
+    const entry = this.entries.get(deviceId)
+    if (!entry?.profile || entry.device.state === 'connected') return
+    entry.device.state = 'reconnecting'
+    entry.reconnectAttempts = 0
+    this.emit()
+    void this.reconnect(entry, entry.profile)
   }
 
   private async openSession(entry: Entry, profile: SensorProfile): Promise<void> {

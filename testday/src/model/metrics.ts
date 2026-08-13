@@ -105,6 +105,51 @@ export function normalizedPower(power: readonly number[]): number | null {
   return count ? (sum / count) ** 0.25 : null
 }
 
+/**
+ * Beat-to-beat variability over a window of RR intervals.
+ *
+ * Both measures are standard and both are only interpretable at rest or in
+ * recovery. During hard exercise the beat-to-beat signal is dominated by
+ * mechanical and respiratory artefact rather than by autonomic tone, so a
+ * number computed mid-stage is real arithmetic on a meaningless input. The
+ * interface has to say which window it covers; this function only refuses to
+ * answer when there are too few beats to answer at all.
+ */
+export interface HrvResult {
+  /** Root mean square of successive differences, ms. */
+  rmssd: number
+  /** Standard deviation of the intervals, ms. */
+  sdnn: number
+  /** Beats the window actually contained. */
+  beats: number
+  /** Mean heart rate over the window, for judging whether any of it applies. */
+  meanHr: number
+}
+
+/** Physiologically impossible intervals, which straps emit on a dropped beat. */
+const RR_MIN_MS = 250
+const RR_MAX_MS = 2000
+const HRV_MIN_BEATS = 20
+
+export function hrv(intervalsMs: readonly number[]): HrvResult | null {
+  const rr = intervalsMs.filter((ms) => Number.isFinite(ms) && ms >= RR_MIN_MS && ms <= RR_MAX_MS)
+  if (rr.length < HRV_MIN_BEATS) return null
+
+  let sumSquaredDiff = 0
+  for (let i = 1; i < rr.length; i++) sumSquaredDiff += (rr[i] - rr[i - 1]) ** 2
+  const rmssd = Math.sqrt(sumSquaredDiff / (rr.length - 1))
+
+  const avg = mean(rr)
+  const variance = mean(rr.map((ms) => (ms - avg) ** 2))
+
+  return {
+    rmssd,
+    sdnn: Math.sqrt(variance),
+    beats: rr.length,
+    meanHr: avg > 0 ? 60000 / avg : 0,
+  }
+}
+
 export const mean = (values: readonly number[]): number =>
   values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0
 

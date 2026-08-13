@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TestRunner, lapsFromSamples } from './session'
 import { DEFAULT_ATHLETE, buildStepTest, makeProtocol, type Protocol } from './protocol'
+import { computeVo2 } from './vo2'
 import type { MachineControl, MetricUpdate } from '../ble/types'
 
 /** Records every target the runner pushes, so ERG behaviour is observable. */
@@ -348,5 +349,191 @@ describe('TestRunner resume', () => {
 
     expect(emitted[0]!.t).toBeGreaterThan(lastT)
     expect(second.recordedSamples.at(-1)!.t).toBeGreaterThan(lastT)
+  })
+})
+
+describe('what the runner records beyond the obvious', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const runTreadmill = async (metrics: MetricUpdate, inclinePct = 2) => {
+    const protocol = makeProtocol('Run', 'run', [
+      {
+        id: 'step_1',
+        name: 'Step 1',
+        durationS: 60,
+        target: { mode: 'speed', kph: 12, inclinePct },
+      },
+    ])
+    const runner = new TestRunner({
+      protocol,
+      athlete: { ...DEFAULT_ATHLETE, massKg: 70, economyPct: 100 },
+      readMetrics: () => metrics,
+      now: () => Date.now(),
+    })
+    runner.start()
+    await advance(3)
+    return runner.recordedSamples
+  }
+
+  it('prefers the gradient the treadmill reports', async () => {
+    const samples = await runTreadmill({ speedMs: 3.33, inclinePct: 1.5 })
+    expect(samples[0].inclinePct).toBeCloseTo(1.5, 3)
+    expect(samples[0].inclineFromTarget).toBeUndefined()
+  })
+
+  /**
+   * The case that produced an export with no gradient at all: a machine that
+   * sends none. The commanded value is recorded instead, and flagged, so the
+   * difference between a measurement and an assumption stays visible.
+   */
+  it('falls back to the commanded gradient and says so', async () => {
+    const samples = await runTreadmill({ speedMs: 3.33 })
+    expect(samples[0].inclinePct).toBe(2)
+    expect(samples[0].inclineFromTarget).toBe(true)
+    expect(samples[0].targetInclinePct).toBe(2)
+  })
+
+  it('prefers the machine odometer over integrating speed', async () => {
+    const samples = await runTreadmill({ speedMs: 3, distanceM: 500 })
+    expect(samples[0].distanceM).toBe(500)
+    expect(samples[0].distanceIntegrated).toBeUndefined()
+  })
+
+  it('integrates distance when the machine reports none, and flags it', async () => {
+    const samples = await runTreadmill({ speedMs: 3 })
+    expect(samples[0].distanceIntegrated).toBe(true)
+    // One sample per second at 3 m/s, starting from the first recorded second.
+    expect(samples[1].distanceM).toBeCloseTo(samples[0].distanceM! + 3, 1)
+  })
+
+  it('stamps a running VO₂ estimate with the equation that produced it', async () => {
+    const samples = await runTreadmill({ speedMs: 12 / 3.6, inclinePct: 2 })
+    expect(samples[0].vo2Method).toBe('acsmRun')
+    expect(samples[0].vo2Est).toBeCloseTo(computeVo2(12, 2).vo2, 1)
+  })
+
+  it('stamps a cycling VO₂ estimate from power', async () => {
+    const { runner } = (() => {
+      const protocol = stepProtocol()
+      const r = new TestRunner({
+        protocol,
+        athlete: { ...DEFAULT_ATHLETE, massKg: 75 },
+        readMetrics: () => ({ power: 200 }),
+        now: () => Date.now(),
+      })
+      return { runner: r }
+    })()
+    runner.start()
+    await advance(2)
+    expect(runner.recordedSamples[0].vo2Method).toBe('acsmBike')
+    expect(runner.recordedSamples[0].vo2Est).toBeCloseTo(35.8, 1)
+  })
+
+  /** No speed and no power is a missing sensor, not a resting athlete. */
+  it('records no VO₂ estimate when there is nothing to estimate from', async () => {
+    const samples = await runTreadmill({ heartRate: 140 })
+    expect(samples[0].vo2Est).toBeUndefined()
+    expect(samples[0].vo2Method).toBeUndefined()
+  })
+
+  it('picks the odometer back up where a resumed session left it', async () => {
+    // Copied, because `recordedSamples` hands back the runner's live array and
+    // that runner is still ticking under the fake clock.
+    const samples = [...(await runTreadmill({ speedMs: 3 }))]
+    const protocol = makeProtocol('Run', 'run', [
+      { id: 'step_1', durationS: 60, target: { mode: 'speed', kph: 12 } },
+    ])
+    const resumed = new TestRunner({
+      protocol,
+      athlete: DEFAULT_ATHLETE,
+      readMetrics: () => ({ speedMs: 3 }),
+      now: () => Date.now(),
+    })
+    resumed.resumeFrom({
+      id: 's',
+      protocolId: protocol.id,
+      protocolName: 'Run',
+      sport: 'run',
+      athlete: DEFAULT_ATHLETE,
+      startedAt: Date.now(),
+      samples: [...samples],
+      lactate: [],
+    })
+    resumed.start()
+    await advance(2)
+    const next = resumed.recordedSamples[samples.length]
+    expect(next.distanceM).toBeGreaterThan(samples[samples.length - 1].distanceM!)
+  })
+})
+
+describe('the protocol as executed', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const withEvents = () => {
+    const events: { kind: string; data?: Record<string, number | string | boolean> }[] = []
+    const runner = new TestRunner({
+      protocol: stepProtocol(),
+      athlete: { ...DEFAULT_ATHLETE, ftpWatts: 300 },
+      readMetrics: () => ({ power: 210 }),
+      now: () => Date.now(),
+      onEvent: (kind, data) => events.push({ kind, data }),
+    })
+    return { runner, events }
+  }
+
+  it('distinguishes the first start from a resume', async () => {
+    const { runner, events } = withEvents()
+    runner.start()
+    await advance(2)
+    runner.pause()
+    runner.start()
+    expect(events.map((e) => e.kind)).toEqual(['start', 'pause', 'resume'])
+  })
+
+  /**
+   * Without this the watchdog cannot tell a deliberately paused test from a
+   * recording that has silently stopped producing samples.
+   */
+  it('reports a pause with where it happened', async () => {
+    const { runner, events } = withEvents()
+    runner.start()
+    await advance(5)
+    runner.pause()
+    const pause = events.find((e) => e.kind === 'pause')
+    expect(pause?.data?.elapsedS).toBeGreaterThanOrEqual(4)
+  })
+
+  it('records a step jump and the intensity trim', async () => {
+    const { runner, events } = withEvents()
+    runner.start()
+    runner.jumpTo(2)
+    runner.adjustIntensity(-3)
+    expect(events.find((e) => e.kind === 'jump')?.data?.stepIndex).toBe(2)
+    expect(events.find((e) => e.kind === 'intensity')?.data?.pct).toBe(97)
+  })
+
+  /** A trim that changes nothing is not a thing that happened. */
+  it('says nothing when the intensity is set to what it already is', () => {
+    const { runner, events } = withEvents()
+    runner.setIntensity(100)
+    expect(events.filter((e) => e.kind === 'intensity')).toHaveLength(0)
+  })
+
+  it('reports the stop when a running test is finished', async () => {
+    const { runner, events } = withEvents()
+    runner.start()
+    await advance(2)
+    runner.finish()
+    expect(events.filter((e) => e.kind === 'pause')).toHaveLength(1)
   })
 })

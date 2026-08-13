@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readJournalFile } from './journal'
-import { isClosed, recordsToSession } from '../src/model/journal'
+import { isClosed, rawFromRecords, recordsToSession } from '../src/model/journal'
 
 /**
  * The claim this whole design rests on is that a recording survives the process
@@ -40,8 +40,22 @@ writer.append({
 
 let t = 0
 setInterval(() => {
+  // The native-rate stream is written between samples, at four times the rate,
+  // which is what a real trainer and strap produce. Interleaving them here is
+  // the point: the two streams share one append-only file, and a kill has to
+  // leave both readable rather than only the one the test happens to check.
+  for (let i = 1; i <= 4; i++) {
+    writer.append({
+      type: 'raw',
+      d: 'trainer',
+      at: 1760000000000 + t * 1000 + i * 250,
+      t: t + i / 4,
+      v: { power: 200 + t, cadence: 90 },
+    })
+  }
   t += 1
   writer.append({ type: 'sample', t, stepIndex: 0, phase: 'work', power: 200 + t })
+  writer.append({ type: 'rr', at: 1760000000000 + t * 1000, t, ms: [800 + t] })
   // Only reported once the append has returned, so the parent is told about a
   // sample strictly after it has been fsynced.
   process.stdout.write(\`wrote \${t}\\n\`)
@@ -122,6 +136,18 @@ describe('surviving a killed process', () => {
     // reverse, or a hole in the middle.
     expect(times.length).toBeGreaterThanOrEqual(acknowledged)
     expect(times).toEqual(Array.from({ length: times.length }, (_, i) => i + 1))
+    // The high-rate stream has to survive the same kill, and interleaving it
+    // with samples must not have corrupted either. Four raw records are written
+    // per sample, so anything short of that for the completed iterations means
+    // records were lost rather than merely cut at the tail.
+    const raw = rawFromRecords(records)
+    expect(raw.length).toBeGreaterThanOrEqual(4 * (times.length - 1))
+    expect(raw.map((r) => r.t)).toEqual([...raw.map((r) => r.t)].sort((a, b) => a - b))
+    expect(raw.every((r) => r.v.power !== undefined)).toBe(true)
+    // Beat intervals likewise: one per sample, so a hole here would show as a
+    // count that has fallen behind the sample stream.
+    expect(session!.rr?.length ?? 0).toBeGreaterThanOrEqual(times.length - 1)
+
     // And the session is correctly recognised as interrupted, so it will be
     // offered for resume rather than filed as finished.
     expect(isClosed(records)).toBe(false)

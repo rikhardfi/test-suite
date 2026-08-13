@@ -4,7 +4,9 @@ import {
   computeElevation,
   computeKcal,
   computeVo2,
+  cyclingVo2,
   economyCategory,
+  estimateVo2,
   pctOfVo2max,
   solveInclineForVo2,
   solveSpeedForVo2,
@@ -106,5 +108,68 @@ describe('derived quantities', () => {
     expect(economyCategory(100)).toBe('typical')
     expect(economyCategory(110)).toBe('slightlyLess')
     expect(economyCategory(111)).toBe('clearlyLess')
+  })
+})
+
+describe('cycling VO₂', () => {
+  it('follows the ACSM leg-ergometry equation', () => {
+    // 7 + 10.8 × 200 / 75 = 35.8
+    expect(cyclingVo2(200, 75)?.vo2).toBeCloseTo(35.8, 4)
+  })
+
+  it('is the resting-plus-unloaded intercept at zero watts', () => {
+    expect(cyclingVo2(0, 75)?.vo2).toBeCloseTo(7, 6)
+  })
+
+  it('refuses a mass it cannot divide by', () => {
+    expect(cyclingVo2(200, 0)).toBeNull()
+  })
+})
+
+describe('estimateVo2', () => {
+  const athlete = { massKg: 75, economyPct: 100 }
+
+  it('estimates a run from measured speed and gradient', () => {
+    const estimate = estimateVo2('run', { speedKph: 12, inclinePct: 2 }, athlete)
+    expect(estimate?.method).toBe('acsmRun')
+    expect(estimate?.vo2).toBeCloseTo(computeVo2(12, 2).vo2, 6)
+  })
+
+  it('estimates a ride from power', () => {
+    const estimate = estimateVo2('bike', { watts: 200 }, athlete)
+    expect(estimate?.method).toBe('acsmBike')
+    expect(estimate?.vo2).toBeCloseTo(35.8, 4)
+  })
+
+  /**
+   * The whole point of the range flag: the number is still returned, because
+   * refusing to display anything is its own kind of dishonesty, but it is
+   * marked so the interface can stop presenting it as if it were measured.
+   */
+  it('flags a ride above the range the equation was fitted over', () => {
+    expect(estimateVo2('bike', { watts: 150 }, athlete)?.inRange).toBe(true)
+    const extrapolated = estimateVo2('bike', { watts: 400 }, athlete)
+    expect(extrapolated?.inRange).toBe(false)
+    expect(extrapolated?.vo2).toBeGreaterThan(0)
+  })
+
+  it('flags a walk as outside the running equation', () => {
+    expect(estimateVo2('run', { speedKph: 5 }, athlete)?.inRange).toBe(false)
+    expect(estimateVo2('run', { speedKph: 12 }, athlete)?.inRange).toBe(true)
+  })
+
+  /**
+   * A missing sensor and a resting athlete must not look alike afterwards, so
+   * the absent case is null rather than zero.
+   */
+  it('returns null when the driving metric is missing', () => {
+    expect(estimateVo2('bike', {}, athlete)).toBeNull()
+    expect(estimateVo2('run', {}, athlete)).toBeNull()
+    expect(estimateVo2('run', { speedKph: 0 }, athlete)).toBeNull()
+  })
+
+  it('assumes level ground when no gradient is known', () => {
+    const level = estimateVo2('run', { speedKph: 12 }, athlete)
+    expect(level?.vo2).toBeCloseTo(computeVo2(12, 0).vo2, 6)
   })
 })

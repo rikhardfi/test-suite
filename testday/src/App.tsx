@@ -75,6 +75,45 @@ export default function App() {
 
   useEffect(() => recorder.onStatus(setStatus), [recorder])
 
+  /**
+   * The native-rate stream. Every decoded notification goes to disk as it
+   * arrives, timestamped on the session clock so it stays alignable with the
+   * 1 Hz samples, alongside beat-to-beat intervals and any change in which
+   * device owns a metric.
+   *
+   * Subscribed only while a recording is open: outside one there is no journal
+   * to append to, and the sensor panel is chatty.
+   */
+  // A dropped sensor is chased indefinitely while a test is running, and only
+  // for a bounded number of attempts when nothing is being recorded.
+  useEffect(() => {
+    manager.setRecording(status.recording)
+  }, [status.recording, manager])
+
+  useEffect(() => {
+    if (!status.recording || !runner) return
+    const stopMetrics = manager.onMetric((deviceId, update) => {
+      const { rrIntervalsMs, ...values } = update
+      const t = Number(runner.elapsed.toFixed(2))
+      if (Object.keys(values).length > 0) recorder.raw(deviceId, t, values)
+      if (rrIntervalsMs?.length) recorder.rr(t, rrIntervalsMs)
+    })
+    const stopSources = manager.onSourceChange((changes) => {
+      for (const change of changes) {
+        recorder.event('sourceChanged', {
+          metric: change.metric,
+          from: change.from ?? '',
+          to: change.to ?? '',
+          name: change.toName ?? '',
+        })
+      }
+    })
+    return () => {
+      stopMetrics()
+      stopSources()
+    }
+  }, [status.recording, runner, manager, recorder])
+
   useEffect(() => {
     void listProtocols().then(setSaved)
   }, [])
@@ -154,6 +193,7 @@ export default function App() {
       },
       onSample: (sample) => recorder.sample(sample),
       onLactate: (entry) => recorder.lactate(entry),
+      onEvent: (kind, data) => recorder.event(kind, data),
     })
     setRunner((previous) => {
       previous?.dispose()

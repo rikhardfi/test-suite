@@ -1,4 +1,10 @@
-import type { JournalEvent, JournalHeader, SessionSummary } from '../src/model/journal'
+import type {
+  JournalEvent,
+  JournalHeader,
+  JournalRaw,
+  JournalRr,
+  SessionSummary,
+} from '../src/model/journal'
 import type { LactateEntry, Sample, SessionRecord } from '../src/model/session'
 
 /**
@@ -9,10 +15,14 @@ export const IPC = {
   paths: 'testday:paths',
   chooseMirror: 'testday:choose-mirror',
   setMirror: 'testday:set-mirror',
+  setConfirmQuit: 'testday:set-confirm-quit',
+  revealLog: 'testday:reveal-log',
   begin: 'testday:begin',
   appendSample: 'testday:append-sample',
   appendLactate: 'testday:append-lactate',
   appendEvent: 'testday:append-event',
+  appendRaw: 'testday:append-raw',
+  appendRr: 'testday:append-rr',
   close: 'testday:close',
   list: 'testday:list',
   read: 'testday:read',
@@ -32,6 +42,10 @@ export interface StoragePaths {
   root: string
   sessionsDir: string
   mirrorDir: string | null
+  /** The diagnostics log, so the interface can offer to reveal it. */
+  logFile: string
+  /** Confirming a quit mid-recording is not configurable; this covers the rest. */
+  confirmQuitWhenIdle: boolean
 }
 
 export interface BeginResult {
@@ -82,11 +96,15 @@ export interface TestdayBridge {
   paths(): Promise<StoragePaths>
   chooseMirrorFolder(): Promise<StoragePaths>
   setMirrorFolder(path: string | null): Promise<StoragePaths>
+  setConfirmQuitWhenIdle(on: boolean): Promise<StoragePaths>
+  revealLog(): Promise<void>
 
   begin(header: JournalHeader): Promise<BeginResult>
   appendSample(sample: Sample): void
   appendLactate(entry: LactateEntry): void
   appendEvent(event: Omit<JournalEvent, 'type'>): void
+  appendRaw(raw: Omit<JournalRaw, 'type'>): void
+  appendRr(rr: Omit<JournalRr, 'type'>): void
   close(endedAt: number): Promise<CloseResult>
 
   list(): Promise<SessionSummary[]>

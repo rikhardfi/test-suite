@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ErrorBoundary } from './ErrorBoundary'
 import { WorkoutGraph } from './WorkoutGraph'
 import { MmpCurve, type CurveSeries } from './MmpCurve'
 import { LapTable } from './LapTable'
@@ -162,14 +163,18 @@ export function Dashboard({
           <span className="spacer" />
           <span className="muted">Workout graph</span>
         </div>
-        <WorkoutGraph protocol={protocol} athlete={athlete} samples={samples} elapsedS={snapshot.elapsedS} />
+        <ErrorBoundary label="Workout graph">
+          <WorkoutGraph protocol={protocol} athlete={athlete} samples={samples} elapsedS={snapshot.elapsedS} />
+        </ErrorBoundary>
       </section>
 
       <section className="panel mmp-panel">
         <div className="panel-head">
           <span className="muted">Live MMP curve (watt)</span>
         </div>
-        <MmpCurve series={curves} />
+        <ErrorBoundary label="MMP curve">
+          <MmpCurve series={curves} />
+        </ErrorBoundary>
       </section>
 
       <section className="panel laps-panel">
@@ -180,16 +185,18 @@ export function Dashboard({
             + Lactate
           </button>
         </div>
-        <LapTable
-          laps={laps}
-          protocol={protocol}
-          athlete={athlete}
-          activeIndex={snapshot.stepIndex}
-          state={snapshot.state}
-          phaseRemainingS={snapshot.phaseRemainingS}
-          onJump={(index) => runner.jumpTo(index)}
-          onLactate={openLactate}
-        />
+        <ErrorBoundary label="Lap table">
+          <LapTable
+            laps={laps}
+            protocol={protocol}
+            athlete={athlete}
+            activeIndex={snapshot.stepIndex}
+            state={snapshot.state}
+            phaseRemainingS={snapshot.phaseRemainingS}
+            onJump={(index) => runner.jumpTo(index)}
+            onLactate={openLactate}
+          />
+        </ErrorBoundary>
       </section>
 
       <footer className="controls">

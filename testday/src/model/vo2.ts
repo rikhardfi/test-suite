@@ -52,6 +52,110 @@ export function computeVo2(speedKph: number, inclinePct: number, economyPct = 10
 }
 
 /**
+ * ACSM leg-ergometry equation: VO₂ (mL/kg/min) = 7 + 10.8 × W / kg.
+ *
+ * The 7 is 3.5 mL/kg/min resting plus 3.5 for unloaded pedalling. The 10.8 is
+ * the oxygen cost of a watt, which embeds a population mean efficiency of about
+ * 22%. It knows nothing about this rider's efficiency, and unlike the running
+ * equation there is no economy term to tell it.
+ */
+export function cyclingVo2(watts: number, bodyMassKg: number): Vo2Result | null {
+  if (!(bodyMassKg > 0) || !Number.isFinite(watts)) return null
+  const vo2 = 7 + (10.8 * watts) / bodyMassKg
+  return { vo2, mets: vo2 / RESTING_VO2 }
+}
+
+/** Which equation produced an estimate. Always recorded with the value. */
+export type Vo2Method = 'acsmRun' | 'acsmBike'
+
+export interface Vo2MethodInfo {
+  label: string
+  /** The equation in one line, for the interface to show beside the number. */
+  note: string
+  /** Range of the driving variable the regression was actually fitted over. */
+  validFrom: number
+  validTo: number
+  validUnit: string
+}
+
+/**
+ * These ranges are the honest part of the estimate. Outside them the equation
+ * still returns a number and that number is an extrapolation, which is why the
+ * range travels with the method instead of living in a comment.
+ */
+export const VO2_METHODS: Record<Vo2Method, Vo2MethodInfo> = {
+  acsmRun: {
+    label: 'ACSM running',
+    note: '3.5 + (0.2·S + 0.9·S·G), S in m/min. Fitted for treadmill running, not walking.',
+    validFrom: 8,
+    validTo: 25,
+    validUnit: 'km/h',
+  },
+  acsmBike: {
+    label: 'ACSM leg ergometry',
+    note: '7 + 10.8·W/kg, a population mean efficiency of about 22%.',
+    validFrom: 50,
+    validTo: 200,
+    validUnit: 'W',
+  },
+}
+
+export interface Vo2Estimate extends Vo2Result {
+  method: Vo2Method
+  /** False when the driver is outside the range the equation was fitted over. */
+  inRange: boolean
+  /** The value `inRange` was judged on, so the interface can say why. */
+  driver: number
+}
+
+/** What the athlete is measured to be doing right now. */
+export interface Vo2Inputs {
+  speedKph?: number
+  inclinePct?: number
+  watts?: number
+}
+
+/**
+ * VO₂ estimated from what the athlete is actually doing, as opposed to
+ * `computeVo2`, which is used the other way round to solve a prescribed target.
+ *
+ * Returns null rather than a zero when the driving metric is missing, because a
+ * missing sensor and a resting athlete are not the same thing and a recorded
+ * zero would make them look alike afterwards.
+ */
+export function estimateVo2(
+  sport: 'bike' | 'run',
+  inputs: Vo2Inputs,
+  athlete: { massKg: number; economyPct?: number },
+): Vo2Estimate | null {
+  if (sport === 'run') {
+    const speedKph = inputs.speedKph
+    if (speedKph == null || !Number.isFinite(speedKph) || speedKph <= 0) return null
+    const { vo2, mets } = computeVo2(speedKph, inputs.inclinePct ?? 0, athlete.economyPct ?? 100)
+    const range = VO2_METHODS.acsmRun
+    return {
+      vo2,
+      mets,
+      method: 'acsmRun',
+      inRange: speedKph >= range.validFrom && speedKph <= range.validTo,
+      driver: speedKph,
+    }
+  }
+
+  const watts = inputs.watts
+  if (watts == null || !Number.isFinite(watts) || watts <= 0) return null
+  const result = cyclingVo2(watts, athlete.massKg)
+  if (!result) return null
+  const range = VO2_METHODS.acsmBike
+  return {
+    ...result,
+    method: 'acsmBike',
+    inRange: watts >= range.validFrom && watts <= range.validTo,
+    driver: watts,
+  }
+}
+
+/**
  * Speed in km/h that produces a target VO₂ at a fixed incline. Null when no
  * positive speed satisfies it, which happens for a target at or below rest.
  */

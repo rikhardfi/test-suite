@@ -6,7 +6,7 @@ import {
   type JournalHeader,
   type SessionSummary,
 } from './journal'
-import type { LactateEntry, Sample, SessionRecord } from './session'
+import type { LactateEntry, RrEntry, Sample, SessionRecord } from './session'
 import type { FinishResult, Recorder, RecorderStatus } from './recorder'
 
 const AUTOSAVE_MS = 15000
@@ -25,6 +25,7 @@ export function createIdbRecorder(): Recorder {
   let header: JournalHeader | null = null
   let samples: Sample[] = []
   let lactate: LactateEntry[] = []
+  let rr: RrEntry[] = []
   let timer: ReturnType<typeof setInterval> | null = null
   let lastDurableAt: number | null = null
   let error: string | null = null
@@ -52,6 +53,7 @@ export function createIdbRecorder(): Recorder {
       endedAt,
       samples,
       lactate,
+      rr: rr.length ? rr : undefined,
     }
   }
 
@@ -76,6 +78,7 @@ export function createIdbRecorder(): Recorder {
       header = next
       samples = []
       lactate = []
+      rr = []
       error = null
       if (timer) clearInterval(timer)
       timer = setInterval(() => void persist(), AUTOSAVE_MS)
@@ -94,6 +97,17 @@ export function createIdbRecorder(): Recorder {
 
     event(_kind: JournalEventKind) {
       // Nothing to append to. Events exist for the journal's benefit.
+    },
+
+    raw() {
+      // Dropped on purpose. This backend rewrites the whole record on a timer,
+      // so holding tens of thousands of native-rate notifications in memory
+      // would make every autosave slower and still lose them on a crash. The
+      // browser build is for rehearsals; the desktop build keeps them.
+    },
+
+    rr(t: number, intervalsMs: number[]) {
+      rr.push({ t, ms: intervalsMs })
     },
 
     async finish(endedAt: number): Promise<FinishResult> {
@@ -143,6 +157,7 @@ export function createIdbRecorder(): Recorder {
       }
       samples = [...session.samples]
       lactate = [...session.lactate]
+      rr = [...(session.rr ?? [])]
       if (timer) clearInterval(timer)
       timer = setInterval(() => void persist(), AUTOSAVE_MS)
       emit()

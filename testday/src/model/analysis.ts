@@ -6,6 +6,8 @@
  * Methods disagree by design: reporting several side by side is the point.
  */
 
+import { mean } from './metrics'
+
 export interface LactatePoint {
   intensity: number
   lactate: number
@@ -433,3 +435,92 @@ const emptyResult = (method: string, label: string, note?: string): ThresholdRes
   lactate: null,
   note,
 })
+
+// --- W′ balance -------------------------------------------------------------
+
+/**
+ * W′ balance over a power series, by the differential model.
+ *
+ * Above critical power the athlete spends W′ at the rate they exceed it. Below
+ * it, W′ refills at a rate proportional both to how far below they are and to
+ * how much is still missing, which is why recovery slows as the tank fills.
+ *
+ * This is Skiba's integral-free form. It is a model, not a measurement, and it
+ * is only as good as the CP and W′ it is given: run it on a fit from a
+ * submaximal step test and it will produce a confident number that means
+ * nothing. The dashboard hides it when there is no valid fit rather than
+ * showing a plausible one.
+ */
+export function wPrimeBalance(
+  power: readonly number[],
+  cpWatts: number,
+  wPrimeJoules: number,
+  dtS = 1,
+): number[] {
+  if (!(cpWatts > 0) || !(wPrimeJoules > 0)) return []
+  const out: number[] = []
+  let balance = wPrimeJoules
+  for (const watts of power) {
+    const w = Number.isFinite(watts) ? watts : 0
+    if (w > cpWatts) {
+      balance -= (w - cpWatts) * dtS
+    } else {
+      balance += ((wPrimeJoules - balance) * (cpWatts - w) * dtS) / wPrimeJoules
+    }
+    balance = Math.min(wPrimeJoules, Math.max(0, balance))
+    out.push(balance)
+  }
+  return out
+}
+
+// --- aerobic decoupling -----------------------------------------------------
+
+export interface DecouplingResult {
+  /** Percentage drift in output per heartbeat between the halves. */
+  pctDrift: number
+  firstHalfRatio: number
+  secondHalfRatio: number
+}
+
+/**
+ * Aerobic decoupling across a steady block: the output-to-heart-rate ratio in
+ * the first half against the second.
+ *
+ * A step test is made of exactly the steady blocks this is computable over, and
+ * every sample already carries the step it belongs to. It means nothing over a
+ * short stage or a ramp, so callers are expected to apply a minimum duration
+ * and this returns null when there is not enough on either side to compare.
+ */
+export function decoupling(
+  output: readonly number[],
+  heartRate: readonly number[],
+  minSamplesPerHalf = 60,
+): DecouplingResult | null {
+  const n = Math.min(output.length, heartRate.length)
+  const half = Math.floor(n / 2)
+  if (half < minSamplesPerHalf) return null
+
+  const ratio = (from: number, to: number): number | null => {
+    const out: number[] = []
+    const hr: number[] = []
+    for (let i = from; i < to; i++) {
+      if (!Number.isFinite(output[i]) || !Number.isFinite(heartRate[i])) continue
+      if (heartRate[i] <= 0) continue
+      out.push(output[i])
+      hr.push(heartRate[i])
+    }
+    if (out.length < minSamplesPerHalf) return null
+    const meanHr = mean(hr)
+    return meanHr > 0 ? mean(out) / meanHr : null
+  }
+
+  const first = ratio(0, half)
+  const second = ratio(half, n)
+  if (first === null || second === null || first === 0) return null
+
+  return {
+    pctDrift: ((second - first) / first) * 100,
+    firstHalfRatio: first,
+    secondHalfRatio: second,
+  }
+}

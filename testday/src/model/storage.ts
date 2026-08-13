@@ -78,6 +78,11 @@ export interface Settings {
    * being derivable by anyone holding the exported files.
    */
   participantSalt?: string
+  /**
+   * Front-face dashboard tiles per sport, in display order. Empty or missing
+   * means the defaults for that sport.
+   */
+  dashboardTiles?: { bike?: string[]; run?: string[] }
 }
 
 /** Made once per machine, on first use, and then left alone. */

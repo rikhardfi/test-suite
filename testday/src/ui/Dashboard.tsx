@@ -5,13 +5,13 @@ import { MmpCurve, type CurveSeries } from './MmpCurve'
 import { LapTable } from './LapTable'
 import { COLORS } from './theme'
 import { useHotkeys, useLiveMetrics, useRunnerSnapshot } from './hooks'
+import { defaultFrontFor, tileByKey, tilesForSport, type TileContext, type TileTone } from './tiles'
 import { formatClock, formatCountdown, mmpCurve } from '../model/metrics'
+import { criticalPower } from '../model/analysis'
 import { planPowerSeries, stepLabel, type Athlete, type Protocol } from '../model/protocol'
 import { lapsFromSamples, type TestRunner } from '../model/session'
 import type { RecorderStatus } from '../model/recorder'
-import { CORE_QUALITY } from '../ble/parse'
 import type { SensorManager } from '../ble/manager'
-import type { MetricUpdate } from '../ble/types'
 
 interface Props {
   runner: TestRunner
@@ -22,7 +22,10 @@ interface Props {
   status: RecorderStatus
   /** How this build stores a recording, said plainly. */
   durability: string
+  /** Tile keys on the front face, in order. Empty means the defaults. */
+  frontTiles: string[]
   onOpenSensors: () => void
+  onEditTiles: () => void
   onFinish: () => void
 }
 
@@ -34,14 +37,17 @@ export function Dashboard({
   bestCurve,
   status,
   durability,
+  frontTiles,
   onOpenSensors,
+  onEditTiles,
   onFinish,
 }: Props) {
   const snapshot = useRunnerSnapshot(runner)
   const metrics = useLiveMetrics(manager)
   const [lactate, setLactate] = useState<{ stepIndex: number; auto: boolean } | null>(null)
-  const isRun = protocol.sport === 'run'
   const openLactate = (stepIndex: number) => setLactate({ stepIndex, auto: false })
+
+  const [face, setFace] = useState<'front' | 'back'>('front')
 
   useHotkeys({
     ' ': () => runner.toggle(),
@@ -50,7 +56,14 @@ export function Dashboard({
     ArrowUp: () => runner.adjustIntensity(1),
     ArrowDown: () => runner.adjustIntensity(-1),
     l: () => openLactate(snapshot.stepIndex),
+    f: () => setFace((current) => (current === 'front' ? 'back' : 'front')),
   })
+
+  // Flip back when a new step starts, so nobody is caught reading the trivia
+  // face at the moment the numbers that matter change.
+  useEffect(() => {
+    setFace('front')
+  }, [snapshot.stepIndex])
 
   // Offer the lactate entry as soon as a sampling break opens, which is the
   // one moment the operator's hands are on the meter and not the keyboard.
@@ -89,14 +102,51 @@ export function Dashboard({
     return series
   }, [samples.length, protocol, athlete.ftpWatts, bestCurve])
 
+  // Fitted from what the athlete has done before. Without a usable fit the
+  // W′ tile hides itself rather than showing a confident meaningless number.
+  const cp = useMemo(() => (bestCurve?.length ? criticalPower(bestCurve) : null), [bestCurve])
+
+  // The last two minutes of beat intervals, for the HRV tile.
+  const rr = useMemo(() => manager.recentRr(120), [samples.length, manager])
+
+  const tileContext: TileContext = {
+    metrics,
+    snapshot,
+    athlete,
+    protocol,
+    samples,
+    cp,
+    rr,
+  }
+
+  /**
+   * The front face shows what the operator chose; the back shows everything the
+   * app can currently compute. A tile with nothing to say is dropped rather
+   * than rendered as a dash, because a grid of dashes trains people to stop
+   * reading the grid.
+   */
+  const visibleTiles = useMemo(() => {
+    const available = tilesForSport(protocol.sport)
+    const keys =
+      face === 'front'
+        ? frontTiles.length
+          ? frontTiles
+          : defaultFrontFor(protocol.sport)
+        : available.map((t) => t.key)
+
+    return keys
+      .map((key) => tileByKey(key))
+      .filter((tile): tile is NonNullable<typeof tile> => !!tile)
+      .filter((tile) => !tile.sport || tile.sport === protocol.sport)
+      .map((tile) => ({ tile, value: tile.compute(tileContext) }))
+      .filter((entry): entry is { tile: typeof entry.tile; value: NonNullable<typeof entry.value> } =>
+        entry.value !== null,
+      )
+    // Recomputed on every metric tick and every recorded sample.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [face, frontTiles, protocol.sport, metrics, snapshot, samples.length, cp, rr, athlete])
+
   const running = snapshot.state === 'running'
-  const targetLabel = isRun
-    ? snapshot.targetKph != null
-      ? `${snapshot.targetKph.toFixed(1)}`
-      : '—'
-    : snapshot.targetPower != null
-      ? String(snapshot.targetPower)
-      : '—'
 
   return (
     <div className="dashboard">
@@ -117,37 +167,44 @@ export function Dashboard({
         </div>
       )}
 
-      <section className="tiles">
-        <Tile label="Timer" value={formatClock(snapshot.elapsedS)} tone="power" wide />
-        <Tile
-          label={snapshot.phase === 'break' ? 'Sample break' : 'Lap time left'}
-          value={formatCountdown(snapshot.phaseRemainingS)}
-          tone={snapshot.phase === 'break' ? 'lactate' : 'heart'}
-          wide
-        />
-        <Tile label="Heart rate" value={fmt(metrics.heartRate)} unit="bpm" tone="heart" wide />
-        <Tile label="Cadence" value={fmt(metrics.cadence)} unit={isRun ? 'spm' : 'rpm'} />
-        <Tile
-          label={isRun ? 'Speed' : 'Power'}
-          value={isRun ? fmt(metrics.speedMs != null ? metrics.speedMs * 3.6 : undefined, 1) : fmt(metrics.power)}
-          unit={isRun ? 'km/h' : 'W'}
-          tone="power"
-        />
-        <Tile
-          label={isRun ? 'Target speed' : 'Target power'}
-          value={targetLabel}
-          unit={isRun ? 'km/h' : 'W'}
-          tone="target"
-        />
-        {metrics.coreTempC != null && (
-          <Tile
-            label="Core temp"
-            value={metrics.coreTempC.toFixed(2)}
-            unit="°C"
-            tone="core"
-            note={coreNote(metrics)}
-          />
-        )}
+      <section className="tile-face">
+        <div className="face-head">
+          <span className="muted small">
+            {face === 'front' ? 'Dashboard' : 'Everything the app knows'}
+          </span>
+          <span className="spacer" />
+          {face === 'front' && (
+            <button className="ghost small" onClick={onEditTiles} title="Choose which tiles appear here">
+              Edit
+            </button>
+          )}
+          <button
+            className="ghost small"
+            onClick={() => setFace(face === 'front' ? 'back' : 'front')}
+            title="Flip the tile grid (F)"
+          >
+            {face === 'front' ? 'Flip ⤺' : '⤻ Back'}
+          </button>
+        </div>
+        <div className={`tiles ${face === 'back' ? 'dense' : ''}`}>
+          {visibleTiles.map(({ tile, value }) => (
+            <Tile
+              key={tile.key}
+              label={tile.label}
+              value={value.value}
+              unit={value.unit}
+              note={value.note}
+              tone={tile.tone}
+              wide={face === 'front' && tile.wide}
+              suspect={value.suspect}
+            />
+          ))}
+          {visibleTiles.length === 0 && (
+            <div className="empty small">
+              Nothing to show yet. Connect a sensor or start the test.
+            </div>
+          )}
+        </div>
       </section>
 
       <section className="panel graph-panel">
@@ -252,17 +309,20 @@ function Tile({
   tone,
   wide,
   note,
+  suspect,
 }: {
   label: string
   value: string
   unit?: string
-  tone?: 'power' | 'heart' | 'target' | 'lactate' | 'core'
+  tone?: TileTone
   wide?: boolean
+  /** Marks a number the app does not fully stand behind, e.g. an extrapolation. */
+  suspect?: boolean
   /** Secondary line, e.g. the quality the sensor put on its own reading. */
   note?: string
 }) {
   return (
-    <div className={`tile ${tone ?? ''} ${wide ? 'wide' : ''}`}>
+    <div className={`tile ${tone ?? ''} ${wide ? 'wide' : ''} ${suspect ? 'suspect' : ''}`}>
       <span className="tile-label">{label}</span>
       <span className="tile-value">
         {value}
@@ -271,21 +331,6 @@ function Tile({
       {note && <span className="tile-note">{note}</span>}
     </div>
   )
-}
-
-/**
- * The CORE reading's own account of itself. Shown rather than used to hide the
- * number: a reading the sensor is unsure about is still a reading, and the
- * judgement about whether to trust it belongs to the person running the test.
- */
-function coreNote(metrics: MetricUpdate): string | undefined {
-  const parts: string[] = []
-  if (metrics.coreQuality != null) {
-    parts.push(CORE_QUALITY[metrics.coreQuality] ?? `quality ${metrics.coreQuality}`)
-  }
-  if (metrics.skinTempC != null) parts.push(`skin ${metrics.skinTempC.toFixed(1)}°`)
-  if (metrics.heatStrainIndex != null) parts.push(`HSI ${metrics.heatStrainIndex.toFixed(1)}`)
-  return parts.length ? parts.join(' · ') : undefined
 }
 
 /**
@@ -405,5 +450,3 @@ function LactateDialog({
   )
 }
 
-const fmt = (value: number | undefined, decimals = 0): string =>
-  value == null || !Number.isFinite(value) ? '—' : value.toFixed(decimals)

@@ -10,6 +10,8 @@ import {
   obla,
   polyfit,
   polyval,
+  decoupling,
+  wPrimeBalance,
   type LactatePoint,
 } from './analysis'
 
@@ -125,5 +127,79 @@ describe('criticalPower', () => {
 
   it('returns null when too few efforts fall in the fitting window', () => {
     expect(criticalPower([{ durationS: 300, watts: 320 }])).toBeNull()
+  })
+})
+
+describe('wPrimeBalance', () => {
+  it('starts full and stays full below critical power', () => {
+    const balance = wPrimeBalance([200, 200, 200], 250, 20000)
+    expect(balance.every((b) => b === 20000)).toBe(true)
+  })
+
+  it('spends W′ at the rate the athlete exceeds CP', () => {
+    // 50 W over CP for 10 s is 500 J out of the tank.
+    const balance = wPrimeBalance(Array(10).fill(300), 250, 20000)
+    expect(balance[balance.length - 1]).toBeCloseTo(19500, 6)
+  })
+
+  it('refills more slowly as the tank fills', () => {
+    const spent = wPrimeBalance(Array(60).fill(350), 250, 20000)
+    const start = spent[spent.length - 1]
+    const recovering = wPrimeBalance(
+      [...Array(60).fill(350), ...Array(120).fill(150)],
+      250,
+      20000,
+    )
+    // Index 59 is the last of the 60 hard seconds, so the two series agree
+    // there and diverge from index 60 on.
+    const early = recovering[65] - recovering[60]
+    const late = recovering[175] - recovering[170]
+    expect(recovering[59]).toBeCloseTo(start, 6)
+    expect(early).toBeGreaterThan(late)
+  })
+
+  it('never goes negative or above the tank', () => {
+    const balance = wPrimeBalance(Array(600).fill(600), 250, 20000)
+    expect(Math.min(...balance)).toBe(0)
+    expect(Math.max(...balance)).toBeLessThanOrEqual(20000)
+  })
+
+  /** Without a valid fit there is no model, and a plausible number would be worse than none. */
+  it('returns nothing without a usable CP and W′', () => {
+    expect(wPrimeBalance([200], 0, 20000)).toEqual([])
+    expect(wPrimeBalance([200], 250, 0)).toEqual([])
+  })
+})
+
+describe('decoupling', () => {
+  it('is zero when output per heartbeat holds steady', () => {
+    const power = Array(240).fill(200)
+    const hr = Array(240).fill(150)
+    expect(decoupling(power, hr)?.pctDrift).toBeCloseTo(0, 6)
+  })
+
+  it('is positive when heart rate drifts up at the same output', () => {
+    const power = Array(240).fill(200)
+    const hr = [...Array(120).fill(150), ...Array(120).fill(160)]
+    const result = decoupling(power, hr)
+    // Same watts against a higher heart rate is a fall in the ratio.
+    expect(result!.pctDrift).toBeLessThan(0)
+    expect(result!.pctDrift).toBeCloseTo((150 / 160 - 1) * 100, 1)
+  })
+
+  /**
+   * A short stage produces a number that is entirely noise, so it produces no
+   * number at all instead.
+   */
+  it('refuses a block too short to mean anything', () => {
+    expect(decoupling(Array(100).fill(200), Array(100).fill(150))).toBeNull()
+    expect(decoupling([], [])).toBeNull()
+  })
+
+  it('ignores samples with no heart rate rather than treating them as zero', () => {
+    const power = Array(240).fill(200)
+    const hr = Array(240).fill(150)
+    hr[5] = 0
+    expect(decoupling(power, hr)?.pctDrift).toBeCloseTo(0, 6)
   })
 })

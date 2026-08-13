@@ -108,6 +108,9 @@ const KIND_PRIORITY: Record<MetricKey, DeviceKind[]> = {
 /** A value older than this is not shown, so a dropped sensor blanks out. */
 const STALE_MS = 5000
 
+/** How long beat intervals are kept for a rolling variability window. */
+const RR_HISTORY_MS = 5 * 60 * 1000
+
 /** Attempts before giving up on a device when no session is being recorded. */
 const IDLE_RECONNECT_ATTEMPTS = 12
 const MAX_BACKOFF_MS = 15000
@@ -145,6 +148,12 @@ export class SensorManager {
   private wheelCircumferenceM = 2.096
   /** True while a session is recording, which is when sensors are chased hardest. */
   private recording = false
+  /**
+   * Beat intervals as they arrive, kept for a few minutes so a rolling HRV
+   * window has something to work on. Bounded by time rather than by count,
+   * because the arrival rate is the athlete's heart rate.
+   */
+  private rrHistory: { at: number; ms: number[] }[] = []
 
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn)
@@ -247,6 +256,21 @@ export class SensorManager {
     return out
   }
 
+  /**
+   * Beat intervals from the last `seconds`, oldest first.
+   *
+   * Kept here rather than on the runner because they arrive per beat from a
+   * sensor, not per second from the protocol clock.
+   */
+  recentRr(seconds: number, now = Date.now()): number[] {
+    const cutoff = now - seconds * 1000
+    const out: number[] = []
+    for (const entry of this.rrHistory) {
+      if (entry.at >= cutoff) out.push(...entry.ms)
+    }
+    return out
+  }
+
   /** The controllable machine, if one is connected. */
   get machine(): SensorDevice | null {
     for (const entry of this.entries.values()) {
@@ -267,7 +291,13 @@ export class SensorManager {
     const now = Date.now()
     for (const [key, value] of Object.entries(update)) {
       if (key === 'rrIntervalsMs') {
-        entry.rrIntervalsMs = value as number[]
+        const intervals = value as number[]
+        entry.rrIntervalsMs = intervals
+        if (intervals.length) {
+          this.rrHistory.push({ at: now, ms: intervals })
+          const cutoff = now - RR_HISTORY_MS
+          while (this.rrHistory.length && this.rrHistory[0].at < cutoff) this.rrHistory.shift()
+        }
         continue
       }
       if (typeof value === 'number' && Number.isFinite(value)) {

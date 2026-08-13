@@ -3,6 +3,7 @@ import { Dashboard } from './ui/Dashboard'
 import { Builder } from './ui/Builder'
 import { Analysis } from './ui/Analysis'
 import { SensorPanel } from './ui/SensorPanel'
+import { TilePicker } from './ui/TilePicker'
 import { Settings } from './ui/Settings'
 import { SensorManager } from './ble/manager'
 import { DEFAULT_ATHLETE, newId, type Athlete, type Protocol } from './model/protocol'
@@ -58,6 +59,7 @@ export default function App() {
   const [saved, setSaved] = useState<Protocol[]>([])
   const [view, setView] = useState<View>('run')
   const [sensorsOpen, setSensorsOpen] = useState(false)
+  const [tilesOpen, setTilesOpen] = useState(false)
   const [activeProtocol, setActiveProtocol] = useState<Protocol | null>(null)
   const [runner, setRunner] = useState<TestRunner | null>(null)
   const [bestCurve, setBestCurve] = useState<{ durationS: number; watts: number }[]>([])
@@ -332,7 +334,9 @@ export default function App() {
             bestCurve={bestCurve}
             status={status}
             durability={recorder.durability}
+            frontTiles={settings.dashboardTiles?.[activeProtocol.sport] ?? []}
             onOpenSensors={() => setSensorsOpen(true)}
+            onEditTiles={() => setTilesOpen(true)}
             onFinish={finish}
           />
         ) : (
@@ -380,6 +384,20 @@ export default function App() {
 
       {sensorsOpen && (
         <SensorPanel manager={manager} ftpWatts={settings.athlete.ftpWatts} onClose={() => setSensorsOpen(false)} />
+      )}
+
+      {tilesOpen && activeProtocol && (
+        <TilePicker
+          sport={activeProtocol.sport}
+          selected={settings.dashboardTiles?.[activeProtocol.sport] ?? []}
+          onChange={(keys) =>
+            setSettings((s) => ({
+              ...s,
+              dashboardTiles: { ...s.dashboardTiles, [activeProtocol.sport]: keys },
+            }))
+          }
+          onClose={() => setTilesOpen(false)}
+        />
       )}
 
       {toast && <div className="toast">{toast}</div>}

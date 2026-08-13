@@ -304,11 +304,40 @@ kbd {
   color: var(--text);
 }
 
-.tiles {
+.tile-face {
   grid-area: tiles;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.face-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+button.small {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.tiles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+  min-width: 0;
+}
+
+/* The flip side carries everything, so it trades size for density. */
+.tiles.dense {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.tiles.dense .tile-value {
+  font-size: clamp(18px, 2vw, 26px);
+}
+.tiles.dense .tile {
+  padding: 8px 10px;
 }
 .tile {
   background: var(--panel);
@@ -355,6 +384,23 @@ kbd {
 
 .tile.core .tile-value {
   color: var(--core);
+}
+
+.tile.vo2 .tile-value {
+  color: var(--lightpurple, #b363ff);
+}
+
+/* A number the app does not fully stand behind: an extrapolation past the
+   range its equation was fitted over, or a variability figure taken at an
+   intensity where it means nothing. Marked rather than hidden, because the
+   operator decides what to trust, and marked rather than left plain, because
+   an unqualified number becomes a measurement the moment it is written down. */
+.tile.suspect {
+  border-style: dashed;
+  border-color: var(--warn, #ff922d);
+}
+.tile.suspect .tile-note {
+  color: var(--warn, #ff922d);
 }
 
 .panel {
@@ -994,4 +1040,47 @@ label.check {
 label.check input {
   width: auto;
   margin: 0;
+}
+
+/* Tile picker */
+.tile-picker {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 20px;
+  align-items: start;
+  max-height: 60vh;
+  overflow: auto;
+}
+.tile-picker h3 {
+  margin: 0 0 8px;
+}
+.tile-picker ol.picked {
+  list-style: decimal inside;
+  margin: 0;
+  padding: 0;
+}
+.tile-picker ol.picked li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+.tile-picker ul.available {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.tile-picker ul.available li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.tile-picker label.check {
+  align-items: flex-start;
+}
+.grow {
+  flex: 1;
+}
+.block {
+  display: block;
 }

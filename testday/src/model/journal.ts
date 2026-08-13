@@ -1,5 +1,5 @@
 import type { Athlete, Protocol } from './protocol'
-import type { LactateEntry, RrEntry, Sample, SessionRecord } from './session'
+import type { LactateEntry, RrEntry, Sample, SessionEvent, SessionRecord } from './session'
 import type { MetricKey } from '../ble/types'
 
 /**
@@ -232,6 +232,7 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
 
   const samples: Sample[] = []
   const rr: RrEntry[] = []
+  const events: SessionEvent[] = []
   // Insertion-ordered, so a corrected value keeps the position of the original.
   const lactate = new Map<number, LactateEntry>()
   let endedAt: number | undefined
@@ -245,6 +246,9 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
       }
       case 'rr':
         rr.push({ t: record.t, ms: record.ms })
+        break
+      case 'event':
+        events.push({ kind: record.kind, at: record.at, data: record.data })
         break
       case 'lactate': {
         const { type: _type, ...entry } = record
@@ -277,6 +281,7 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
     samples,
     lactate: [...lactate.values()].filter((entry) => !entry.removed),
     rr: rr.length ? rr : undefined,
+    events: events.length ? events : undefined,
   }
 }
 

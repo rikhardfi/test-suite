@@ -10,20 +10,26 @@ import type { Recorder } from '../model/recorder'
 import type { SessionSummary } from '../model/journal'
 import {
   download,
+  downloadBytes,
   lapsToCsv,
   samplesToCsv,
   sessionFilename,
   sessionToJson,
-  sessionToTcx,
 } from '../model/export'
+import { fitFilename, sessionToFit } from '../model/fit'
+import { pseudonymise, researchSidecar } from '../model/research'
+import { APP_VERSION } from '../model/version'
 
 export function Analysis({
   protocols,
   recorder,
+  salt,
   onResume,
 }: {
   protocols: Protocol[]
   recorder: Recorder
+  /** Machine-local salt for the participant code. Never leaves this machine. */
+  salt: string
   /** Reopens a session for recording, finished or not. */
   onResume: (summary: SessionSummary) => void
 }) {
@@ -92,6 +98,7 @@ export function Analysis({
           key={session.id}
           session={session}
           protocols={protocols}
+          salt={salt}
           onResume={() => {
             const summary = sessions.find((s) => s.id === session.id)
             if (summary) onResume(summary)
@@ -118,12 +125,14 @@ export function Analysis({
 function SessionDetail({
   session,
   protocols,
+  salt,
   onLactate,
   onResume,
   onDelete,
 }: {
   session: SessionRecord
   protocols: Protocol[]
+  salt: string
   onLactate: (entry: LactateEntry) => void | Promise<void>
   onResume: () => void
   onDelete: () => void
@@ -191,13 +200,36 @@ function SessionDetail({
           <button onClick={() => download(sessionFilename(session, 'csv'), samplesToCsv(session), 'text/csv')}>
             Samples CSV
           </button>
+          <button
+            title="Pseudonymised 1 Hz CSV plus a sidecar describing every column, the equations used and the protocol as actually executed"
+            onClick={() => {
+              // Pseudonymised, because this is the export that leaves the
+              // machine. The name stays here; the code goes with the data.
+              const anonymous = pseudonymise(session, salt)
+              download(sessionFilename(anonymous, 'research.csv'), samplesToCsv(anonymous), 'text/csv')
+              download(
+                sessionFilename(anonymous, 'research.json'),
+                researchSidecar(anonymous, { appVersion: APP_VERSION, protocol: protocol ?? undefined }),
+                'application/json',
+              )
+            }}
+          >
+            Research export
+          </button>
           <button onClick={() => download(sessionFilename(session, 'laps.csv'), lapsToCsv(laps), 'text/csv')}>
             Laps CSV
           </button>
           <button
-            onClick={() => download(sessionFilename(session, 'tcx'), sessionToTcx(session), 'application/xml')}
+            title="Activity file with laps per protocol step, and lactate, RPE, targets and the VO₂ estimate as developer fields"
+            onClick={() =>
+              downloadBytes(
+                fitFilename(session),
+                sessionToFit(session, { laps, protocol: protocol ?? undefined }),
+                'application/vnd.ant.fit',
+              )
+            }
           >
-            TCX
+            FIT
           </button>
           <button
             onClick={() => download(sessionFilename(session, 'json'), sessionToJson(session), 'application/json')}

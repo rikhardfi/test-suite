@@ -72,6 +72,21 @@ export interface Settings {
   athlete: Athlete
   wheelCircumferenceM: number
   lastProtocolId?: string
+  /**
+   * Salt for the participant code in a research export. Generated once on this
+   * machine and never exported, which is what stops the same athlete's code
+   * being derivable by anyone holding the exported files.
+   */
+  participantSalt?: string
+}
+
+/** Made once per machine, on first use, and then left alone. */
+export function ensureParticipantSalt(settings: Settings): Settings {
+  if (settings.participantSalt) return settings
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  const salt = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+  return { ...settings, participantSalt: salt }
 }
 
 /** Settings are small and needed synchronously at boot, so they live in localStorage. */

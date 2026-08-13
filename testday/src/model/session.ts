@@ -85,6 +85,13 @@ export interface RrEntry {
   ms: number[]
 }
 
+/** One thing the operator or a sensor did, kept in the order it happened. */
+export interface SessionEvent {
+  kind: string
+  at: number
+  data?: Record<string, number | string | boolean>
+}
+
 export interface SessionRecord {
   id: string
   protocolId: string
@@ -97,6 +104,12 @@ export interface SessionRecord {
   lactate: LactateEntry[]
   /** Present when a strap reported them. Not resampled onto the 1 Hz clock. */
   rr?: RrEntry[]
+  /**
+   * Operator actions in order: starts, pauses, jumps, intensity trims, sensor
+   * handovers. This is the protocol as executed, which diverges from the
+   * protocol as written the moment anybody touches anything.
+   */
+  events?: SessionEvent[]
   notes?: string
 }
 

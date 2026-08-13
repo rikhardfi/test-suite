@@ -15,6 +15,7 @@ import { IDLE_STATUS, headerFor, type RecorderStatus } from './model/recorder'
 import type { SessionSummary } from './model/journal'
 import {
   deleteProtocol,
+  ensureParticipantSalt,
   listProtocols,
   listSessions,
   loadSettings,
@@ -51,7 +52,9 @@ export default function App() {
   recorderRef.current ??= createRecorder()
   const recorder = recorderRef.current
 
-  const [settings, setSettings] = useState<SettingsShape>(() => loadSettings(DEFAULT_SETTINGS))
+  const [settings, setSettings] = useState<SettingsShape>(() =>
+    ensureParticipantSalt(loadSettings(DEFAULT_SETTINGS)),
+  )
   const [saved, setSaved] = useState<Protocol[]>([])
   const [view, setView] = useState<View>('run')
   const [sensorsOpen, setSensorsOpen] = useState(false)
@@ -75,6 +78,12 @@ export default function App() {
 
   useEffect(() => recorder.onStatus(setStatus), [recorder])
 
+  // A dropped sensor is chased indefinitely while a test is running, and only
+  // for a bounded number of attempts when nothing is being recorded.
+  useEffect(() => {
+    manager.setRecording(status.recording)
+  }, [status.recording, manager])
+
   /**
    * The native-rate stream. Every decoded notification goes to disk as it
    * arrives, timestamped on the session clock so it stays alignable with the
@@ -84,12 +93,6 @@ export default function App() {
    * Subscribed only while a recording is open: outside one there is no journal
    * to append to, and the sensor panel is chatty.
    */
-  // A dropped sensor is chased indefinitely while a test is running, and only
-  // for a bounded number of attempts when nothing is being recorded.
-  useEffect(() => {
-    manager.setRecording(status.recording)
-  }, [status.recording, manager])
-
   useEffect(() => {
     if (!status.recording || !runner) return
     const stopMetrics = manager.onMetric((deviceId, update) => {
@@ -359,7 +362,12 @@ export default function App() {
       )}
 
       {view === 'analysis' && (
-        <Analysis protocols={protocols} recorder={recorder} onResume={resumeSession} />
+        <Analysis
+          protocols={protocols}
+          recorder={recorder}
+          salt={settings.participantSalt ?? ''}
+          onResume={resumeSession}
+        />
       )}
 
       {view === 'settings' && (

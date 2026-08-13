@@ -1,65 +1,46 @@
-import type { Lap, SessionRecord } from './session'
+import type { Lap, Sample, SessionRecord } from './session'
+import { SAMPLE_COLUMNS } from './research'
 
-/** One row per recorded second, for a spreadsheet or R/Python. */
+/**
+ * One row per recorded second, for a spreadsheet or R/Python.
+ *
+ * The header comes from `SAMPLE_COLUMNS` rather than being written out here, so
+ * the documented contract and the file cannot drift apart. A test asserts the
+ * row width matches the column count, which is what catches a column added to
+ * one and not the other.
+ */
 export function samplesToCsv(session: SessionRecord): string {
-  const header = [
-    'elapsed_s',
-    'step_index',
-    'phase',
-    'power_w',
-    'target_power_w',
-    'heart_rate_bpm',
-    'cadence_rpm',
-    'speed_ms',
-    'speed_kph',
-    'pace_s_per_km',
-    'incline_pct',
-    // Whether the gradient was measured by the machine or assumed from the
-    // command. Exported so the distinction survives into the analysis.
-    'incline_source',
-    'distance_m',
-    'distance_source',
-    'resistance',
-    'target_incline_pct',
-    'vo2_est_ml_kg_min',
-    // The equation, never separated from the number it produced.
-    'vo2_method',
-    'core_temp_c',
-    'skin_temp_c',
-    'heat_strain_index',
-    // Carried into the export so a reading can be judged later against the
-    // quality the sensor itself put on it.
-    'core_quality',
-    'core_hrm_state',
+  const rows = session.samples.map((s) => sampleRow(s).join(','))
+  return [SAMPLE_COLUMNS.map((c) => c.name).join(','), ...rows].join('\n')
+}
+
+/** One row, in `SAMPLE_COLUMNS` order. Blank means not reported, never zero. */
+export function sampleRow(s: Sample): (string | number)[] {
+  return [
+    s.t,
+    s.stepIndex,
+    s.phase,
+    s.power ?? '',
+    s.targetPower ?? '',
+    s.heartRate ?? '',
+    s.cadence ?? '',
+    s.speedMs?.toFixed(2) ?? '',
+    s.speedMs ? (s.speedMs * 3.6).toFixed(2) : '',
+    s.speedMs && s.speedMs > 0.1 ? Math.round(1000 / s.speedMs) : '',
+    s.inclinePct?.toFixed(1) ?? '',
+    s.inclinePct == null ? '' : s.inclineFromTarget ? 'commanded' : 'measured',
+    s.distanceM?.toFixed(1) ?? '',
+    s.distanceM == null ? '' : s.distanceIntegrated ? 'integrated' : 'machine',
+    s.resistance ?? '',
+    s.targetInclinePct?.toFixed(1) ?? '',
+    s.vo2Est?.toFixed(2) ?? '',
+    s.vo2Method ?? '',
+    s.coreTempC?.toFixed(2) ?? '',
+    s.skinTempC?.toFixed(2) ?? '',
+    s.heatStrainIndex?.toFixed(1) ?? '',
+    s.coreQuality ?? '',
+    s.coreHrmState ?? '',
   ]
-  const rows = session.samples.map((s) =>
-    [
-      s.t,
-      s.stepIndex,
-      s.phase,
-      s.power ?? '',
-      s.targetPower ?? '',
-      s.heartRate ?? '',
-      s.cadence ?? '',
-      s.speedMs?.toFixed(2) ?? '',
-      s.speedMs ? (s.speedMs * 3.6).toFixed(2) : '',
-      s.speedMs && s.speedMs > 0.1 ? Math.round(1000 / s.speedMs) : '',
-      s.inclinePct?.toFixed(1) ?? '',
-      s.inclinePct == null ? '' : s.inclineFromTarget ? 'commanded' : 'measured',
-      s.distanceM?.toFixed(1) ?? '',
-      s.distanceM == null ? '' : s.distanceIntegrated ? 'integrated' : 'machine',
-      s.resistance ?? '',
-      s.targetInclinePct?.toFixed(1) ?? '',
-      s.vo2Est?.toFixed(2) ?? '',
-      s.vo2Method ?? '',
-      s.coreTempC?.toFixed(2) ?? '',
-      s.skinTempC?.toFixed(2) ?? '',
-      s.heatStrainIndex?.toFixed(1) ?? '',
-      s.coreQuality ?? '',
-      s.coreHrmState ?? '',
-    ].join(','),
-  )
-  return [header.join(','), ...rows].join('\n')
 }
 
 /** Step-level summary, which is what actually goes into a test report. */
@@ -99,74 +80,16 @@ export function lapsToCsv(laps: readonly Lap[]): string {
 
 export const sessionToJson = (session: SessionRecord): string => JSON.stringify(session, null, 2)
 
-/**
- * TCX with a trackpoint per second. Chosen over FIT because it is text, is
- * accepted by TrainingPeaks, Golden Cheetah and Strava, and carries power and
- * cadence in the extension namespace those tools already read.
- */
-export function sessionToTcx(session: SessionRecord): string {
-  const start = new Date(session.startedAt)
-  const sport = session.sport === 'run' ? 'Running' : 'Biking'
-  let distance = 0
-
-  const trackpoints = session.samples
-    .map((s, index) => {
-      const previous = index > 0 ? session.samples[index - 1] : null
-      const dt = previous ? s.t - previous.t : 0
-      if (s.speedMs) distance += s.speedMs * dt
-
-      const time = new Date(session.startedAt + s.t * 1000).toISOString()
-      const parts = [
-        `        <Trackpoint>`,
-        `          <Time>${time}</Time>`,
-        `          <DistanceMeters>${distance.toFixed(1)}</DistanceMeters>`,
-      ]
-      if (s.heartRate != null) {
-        parts.push(
-          `          <HeartRateBpm><Value>${Math.round(s.heartRate)}</Value></HeartRateBpm>`,
-        )
-      }
-      if (s.cadence != null) parts.push(`          <Cadence>${Math.round(s.cadence)}</Cadence>`)
-      if (s.power != null || s.speedMs != null) {
-        parts.push(
-          `          <Extensions><ns3:TPX>`,
-          s.speedMs != null ? `            <ns3:Speed>${s.speedMs.toFixed(2)}</ns3:Speed>` : '',
-          s.power != null ? `            <ns3:Watts>${Math.round(s.power)}</ns3:Watts>` : '',
-          `          </ns3:TPX></Extensions>`,
-        )
-      }
-      parts.push(`        </Trackpoint>`)
-      return parts.filter(Boolean).join('\n')
-    })
-    .join('\n')
-
-  const totalSeconds = session.samples.length ? session.samples[session.samples.length - 1].t : 0
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<TrainingCenterDatabase
-  xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"
-  xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
-  <Activities>
-    <Activity Sport="${sport}">
-      <Id>${start.toISOString()}</Id>
-      <Lap StartTime="${start.toISOString()}">
-        <TotalTimeSeconds>${totalSeconds}</TotalTimeSeconds>
-        <DistanceMeters>${distance.toFixed(1)}</DistanceMeters>
-        <Intensity>Active</Intensity>
-        <TriggerMethod>Manual</TriggerMethod>
-        <Track>
-${trackpoints}
-        </Track>
-      </Lap>
-      <Notes>${escapeXml(session.protocolName)}</Notes>
-    </Activity>
-  </Activities>
-</TrainingCenterDatabase>
-`
+export function download(filename: string, content: string, mime: string): void {
+  downloadBlob(filename, new Blob([content], { type: mime }))
 }
 
-export function download(filename: string, content: string, mime: string): void {
-  const blob = new Blob([content], { type: mime })
+/** The same, for a binary format. FIT is bytes, not text. */
+export function downloadBytes(filename: string, bytes: Uint8Array, mime: string): void {
+  downloadBlob(filename, new Blob([bytes as BlobPart], { type: mime }))
+}
+
+function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
@@ -186,6 +109,3 @@ export function sessionFilename(session: SessionRecord, extension: string): stri
 }
 
 const quote = (value: string): string => `"${value.replace(/"/g, '""')}"`
-
-const escapeXml = (value: string): string =>
-  value.replace(/[<>&'"]/g, (c) => `&${{ '<': 'lt', '>': 'gt', '&': 'amp', "'": 'apos', '"': 'quot' }[c]};`)

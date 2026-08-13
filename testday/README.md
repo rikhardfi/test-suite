@@ -30,7 +30,9 @@ back for resume on the next launch. See [Recordings](#recordings).
 **Analysis.** A third-order fit through the lactate points with six threshold methods reported side by
 side (baseline + 1.0 mmol/L, log-log breakpoint, Dmax, modified Dmax, OBLA 2.0 and OBLA 4.0), heart
 rate interpolated at each. Plus the mean-maximal power curve, two-parameter critical power with W′,
-and normalised power. Export as sample CSV, lap CSV, TCX or raw JSON.
+and normalised power. Export as sample CSV, lap CSV, FIT or raw JSON, plus a research export that
+pairs a pseudonymised 1 Hz CSV with a sidecar describing every column, every equation used, and the
+protocol as actually executed.
 
 ## Bluetooth support
 
@@ -170,7 +172,9 @@ src/
     metrics.ts     Rolling averages, MMP tracker, normalised power
     analysis.ts    Polynomial fitting, threshold methods, critical power
     storage.ts     IndexedDB for sessions and protocols
-    export.ts      CSV, TCX and JSON writers
+    export.ts      CSV and JSON writers
+    fit.ts         FIT encoder, including the developer fields TCX had nowhere for
+    research.ts    Frozen CSV column contract, metadata sidecar, participant codes
   ui/              React components and canvas charts
 ```
 

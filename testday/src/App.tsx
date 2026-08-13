@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Dashboard } from './ui/Dashboard'
 import { Builder } from './ui/Builder'
 import { Analysis } from './ui/Analysis'
+import { Longitudinal } from './ui/Longitudinal'
 import { SensorPanel } from './ui/SensorPanel'
 import { TilePicker } from './ui/TilePicker'
 import { EnvironmentForm } from './ui/EnvironmentForm'
@@ -62,6 +63,7 @@ export default function App() {
   const [sensorsOpen, setSensorsOpen] = useState(false)
   const [tilesOpen, setTilesOpen] = useState(false)
   const [environmentOpen, setEnvironmentOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [activeProtocol, setActiveProtocol] = useState<Protocol | null>(null)
   const [runner, setRunner] = useState<TestRunner | null>(null)
   const [bestCurve, setBestCurve] = useState<{ durationS: number; watts: number }[]>([])
@@ -424,8 +426,13 @@ export default function App() {
         />
       )}
 
-      {view === 'analysis' && (
+      {view === 'analysis' && historyOpen && (
+        <Longitudinal recorder={recorder} protocols={protocols} onClose={() => setHistoryOpen(false)} />
+      )}
+
+      {view === 'analysis' && !historyOpen && (
         <Analysis
+          onOpenHistory={() => setHistoryOpen(true)}
           protocols={protocols}
           recorder={recorder}
           salt={settings.participantSalt ?? ''}

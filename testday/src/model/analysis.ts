@@ -384,6 +384,94 @@ export function analyseLactate(points: readonly LactatePoint[]): ThresholdResult
   ]
 }
 
+// --- uncertainty ----------------------------------------------------------
+
+export interface ThresholdBand extends ThresholdResult {
+  /** Lowest and highest estimate across the leave-one-out refits. */
+  lowIntensity: number | null
+  highIntensity: number | null
+  /** Refits that produced a value at all. */
+  fits: number
+  /**
+   * Set when the estimate should not be read to the precision it is printed
+   * at: too few refits succeeded, or they disagree by too much.
+   */
+  unstable: boolean
+  /** Why it is unstable, in words, for the interface to show. */
+  reason?: string
+}
+
+/** Beyond this spread, relative to the estimate, the number is not a number. */
+const UNSTABLE_SPREAD = 0.1
+
+/**
+ * Leave-one-out bands on every threshold method.
+ *
+ * A cubic through five or six noisy lactate points produces six confident
+ * decimal places and says nothing about how wide the interval is. Refitting
+ * with each point dropped in turn is the cheapest honest answer available: if
+ * removing one blood sample moves the threshold by thirty watts, that is what
+ * the estimate is worth, and the interface has to show it rather than the
+ * decimals.
+ *
+ * Leave-one-out rather than a bootstrap because there are five or six points.
+ * Resampling that few with replacement mostly produces duplicates, and a
+ * bootstrap band from it would look rigorous and mean less than this does.
+ */
+export function analyseLactateWithBands(points: readonly LactatePoint[]): ThresholdBand[] {
+  const sorted = sortPoints(points)
+  const full = analyseLactate(sorted)
+
+  // Three points is the fewest any of these methods can fit, so dropping one
+  // from four is the smallest case where a band means anything.
+  if (sorted.length < 4) {
+    return full.map((result) => ({
+      ...result,
+      lowIntensity: null,
+      highIntensity: null,
+      fits: 0,
+      unstable: result.intensity != null,
+      reason:
+        result.intensity == null
+          ? undefined
+          : `Only ${sorted.length} lactate points: too few to say how stable this is.`,
+    }))
+  }
+
+  const refits = sorted.map((_, omit) =>
+    analyseLactate(sorted.filter((_point, index) => index !== omit)),
+  )
+
+  return full.map((result, methodIndex) => {
+    const values = refits
+      .map((refit) => refit[methodIndex]?.intensity)
+      .filter((value): value is number => value != null && Number.isFinite(value))
+
+    if (result.intensity == null || values.length === 0) {
+      return { ...result, lowIntensity: null, highIntensity: null, fits: values.length, unstable: false }
+    }
+
+    const low = Math.min(...values)
+    const high = Math.max(...values)
+    const spread = result.intensity > 0 ? (high - low) / result.intensity : Infinity
+    const missed = sorted.length - values.length
+
+    return {
+      ...result,
+      lowIntensity: Number(low.toFixed(1)),
+      highIntensity: Number(high.toFixed(1)),
+      fits: values.length,
+      unstable: spread > UNSTABLE_SPREAD || missed > 0,
+      reason:
+        missed > 0
+          ? `${missed} of ${sorted.length} refits produced no estimate at all.`
+          : spread > UNSTABLE_SPREAD
+            ? `Dropping any one point moves this by up to ${(high - low).toFixed(0)}, which is ${(spread * 100).toFixed(0)}% of the estimate.`
+            : undefined,
+    }
+  })
+}
+
 // --- critical power -------------------------------------------------------
 
 export interface CriticalPowerResult {

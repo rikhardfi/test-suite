@@ -29,7 +29,10 @@ back for resume on the next launch. See [Recordings](#recordings).
 
 **Analysis.** A third-order fit through the lactate points with six threshold methods reported side by
 side (baseline + 1.0 mmol/L, log-log breakpoint, Dmax, modified Dmax, OBLA 2.0 and OBLA 4.0), heart
-rate interpolated at each. Plus the mean-maximal power curve, two-parameter critical power with W′,
+rate interpolated at each, and a leave-one-out band on every one of them so the estimate is read to
+the precision it actually has. A longitudinal view overlays an athlete's test days against each
+other, and a metabolic cart export can be imported to place VT1 and VT2 beside the lactate
+thresholds. Plus the mean-maximal power curve, two-parameter critical power with W′,
 and normalised power. Export as sample CSV, lap CSV, FIT or raw JSON, plus a research export that
 pairs a pseudonymised 1 Hz CSV with a sidecar describing every column, every equation used, and the
 protocol as actually executed.
@@ -170,7 +173,9 @@ src/
     journal.ts     The on-disk record format: encode, decode, reconstruct
     recorder.ts    Where a recording goes; file backend on desktop, IndexedDB in a browser
     metrics.ts     Rolling averages, MMP tracker, normalised power
-    analysis.ts    Polynomial fitting, threshold methods, critical power
+    analysis.ts    Polynomial fitting, threshold methods, critical power, W-prime, decoupling
+    ventilatory.ts Cart import, V-slope VT1 and VE/VCO2 VT2
+    longitudinal.ts One athlete across test days, with the bands carried through
     storage.ts     IndexedDB for sessions and protocols
     export.ts      CSV and JSON writers
     fit.ts         FIT encoder, including the developer fields TCX had nowhere for

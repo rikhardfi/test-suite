@@ -3,7 +3,7 @@ import { LactateChart } from './LactateChart'
 import { MmpCurve } from './MmpCurve'
 import { COLORS } from './theme'
 import { formatClock, mmpCurve, normalizedPower, paceFromSpeed } from '../model/metrics'
-import { analyseLactate, criticalPower, type LactatePoint } from '../model/analysis'
+import { analyseLactateWithBands, criticalPower, type LactatePoint } from '../model/analysis'
 import { lapsFromSamples, type LactateEntry, type SessionRecord } from '../model/session'
 import type { Protocol } from '../model/protocol'
 import type { Recorder } from '../model/recorder'
@@ -18,14 +18,17 @@ import {
 } from '../model/export'
 import { fitFilename, sessionToFit } from '../model/fit'
 import { pseudonymise, researchSidecar } from '../model/research'
+import { parseCartCsv, ventilatoryThresholds, type VentilatoryResult } from '../model/ventilatory'
 import { APP_VERSION } from '../model/version'
 
 export function Analysis({
   protocols,
   recorder,
   salt,
+  onOpenHistory,
   onResume,
 }: {
+  onOpenHistory: () => void
   protocols: Protocol[]
   recorder: Recorder
   /** Machine-local salt for the participant code. Never leaves this machine. */
@@ -73,6 +76,13 @@ export function Analysis({
     <div className="page analysis">
       <aside className="session-list">
         <h1>Sessions</h1>
+        <button
+          className="ghost"
+          onClick={onOpenHistory}
+          title="Compare this athlete's test days against each other rather than against a population"
+        >
+          Across test days
+        </button>
         {loading && <p className="muted">Loading…</p>}
         {!loading && sessions.length === 0 && <p className="muted">No saved sessions yet.</p>}
         <ul>
@@ -172,7 +182,25 @@ function SessionDetail({
     [session.lactate, laps, isRun],
   )
 
-  const thresholds = useMemo(() => analyseLactate(points), [points])
+  const thresholds = useMemo(() => analyseLactateWithBands(points), [points])
+
+  /**
+   * Ventilatory thresholds imported from a metabolic cart, placed beside the
+   * lactate ones. This is also the only route by which the app's own VO₂
+   * estimates ever get checked against a measurement.
+   */
+  const [cart, setCart] = useState<{ result: VentilatoryResult; file: string; matched: string[] } | null>(
+    null,
+  )
+
+  const importCart = async (file: File) => {
+    const parsed = parseCartCsv(await file.text())
+    setCart({
+      result: ventilatoryThresholds(parsed.samples),
+      file: file.name,
+      matched: Object.values(parsed.matched),
+    })
+  }
   const power = useMemo(() => session.samples.map((s) => s.power ?? 0), [session.samples])
   const curve = useMemo(() => mmpCurve(power), [power])
   const cp = useMemo(() => criticalPower(curve), [curve])
@@ -260,6 +288,9 @@ function SessionDetail({
               <tr>
                 <th>Method</th>
                 <th>{isRun ? 'Speed' : 'Power'}</th>
+                <th title="What the estimate becomes if any one blood sample is dropped">
+                  Drop one
+                </th>
                 <th>HR</th>
                 <th>La</th>
               </tr>
@@ -269,12 +300,73 @@ function SessionDetail({
                 <tr key={result.method} className={result.intensity == null ? 'muted' : ''}>
                   <td title={result.note}>{result.label}</td>
                   <td>{fmtIntensity(result.intensity)}</td>
+                  {/* A cubic through five noisy points gives six confident
+                      decimals and says nothing about how wide the interval is.
+                      This is the cheapest honest answer to that. */}
+                  <td
+                    className={result.unstable ? 'warn small' : 'muted small'}
+                    title={result.reason}
+                  >
+                    {result.lowIntensity != null && result.highIntensity != null
+                      ? `${fmtIntensity(result.lowIntensity)} to ${fmtIntensity(result.highIntensity)}`
+                      : result.intensity != null
+                        ? 'too few points'
+                        : '—'}
+                  </td>
                   <td>{result.heartRate ?? '—'}</td>
                   <td>{result.lactate != null ? result.lactate.toFixed(2) : '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {cart && (
+            <div className="pad">
+              <h3>Ventilatory thresholds</h3>
+              <p className="muted small">
+                From {cart.file}. Columns read: {cart.matched.join(', ') || 'none'}.
+              </p>
+              <table className="results">
+                <tbody>
+                  {cart.result.vt1 && (
+                    <tr>
+                      <td title={cart.result.vt1.note}>VT1 · {cart.result.vt1.method}</td>
+                      <td>{cart.result.vt1.vo2?.toFixed(0) ?? '—'} mL/min</td>
+                      <td>{cart.result.vt1.heartRate?.toFixed(0) ?? '—'} bpm</td>
+                    </tr>
+                  )}
+                  {cart.result.vt2 && (
+                    <tr>
+                      <td title={cart.result.vt2.note}>VT2 · {cart.result.vt2.method}</td>
+                      <td>{cart.result.vt2.vo2?.toFixed(0) ?? '—'} mL/min</td>
+                      <td>{cart.result.vt2.heartRate?.toFixed(0) ?? '—'} bpm</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {/* Said out loud rather than left as a blank row: an absent
+                  threshold and a failed import look identical otherwise. */}
+              {cart.result.problems.map((problem) => (
+                <p key={problem} className="muted small">
+                  {problem}
+                </p>
+              ))}
+            </div>
+          )}
+
+          <div className="pad">
+            <label className="check">
+              <input
+                type="file"
+                accept=".csv,.txt,text/csv"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) void importCart(file)
+                }}
+              />
+              Import a metabolic cart export to place VT1 and VT2 beside these
+            </label>
+          </div>
+
           {points.length < 4 && (
             <p className="muted small pad">
               Dmax and the log-log breakpoint need four or more lactate samples. Add them in the table below.

@@ -238,7 +238,11 @@ export class TestRunner {
     this.startedAt = session.startedAt
 
     const last = this.samples[this.samples.length - 1]
-    if (!last) return
+    if (!last) {
+      this.state = 'paused'
+      this.emit()
+      return
+    }
 
     this.elapsedS = last.t
     this.nextSampleAt = last.t + SAMPLE_INTERVAL_S
@@ -254,14 +258,18 @@ export class TestRunner {
     }
 
     if (index >= this.protocol.steps.length) {
+      // The protocol already ran to the end. Come back paused at the last step
+      // rather than finished: `toggle()` refuses to start a finished runner, so
+      // a finished state here would make the session impossible to reopen from
+      // the dashboard. Pressing start now completes it again immediately, which
+      // is honest; to record more, jump to a step first.
       this.stepIndex = this.protocol.steps.length - 1
       this.stepElapsedS = stepTotalS(this.protocol.steps[this.stepIndex])
-      this.state = 'finished'
     } else {
       this.stepIndex = index
       this.stepElapsedS = remaining
-      this.state = 'paused'
     }
+    this.state = 'paused'
     this.emit()
   }
 

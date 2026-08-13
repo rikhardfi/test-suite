@@ -53,6 +53,16 @@ export interface JournalClose {
 }
 
 /**
+ * Written when a finished session is opened for recording again. The journal is
+ * append-only, so a session cannot be un-closed by deleting its close record;
+ * the reopening is itself an event, and the last one wins.
+ */
+export interface JournalReopen {
+  type: 'reopened'
+  at: number
+}
+
+/**
  * Samples and lactate entries are stored flat rather than nested, because the
  * operator reads this file with `tail -f` during a test. Neither `Sample` nor
  * `LactateEntry` has a `type` key, so there is nothing to collide with.
@@ -63,6 +73,7 @@ export type JournalRecord =
   | ({ type: 'lactate' } & LactateEntry)
   | JournalEvent
   | JournalClose
+  | JournalReopen
 
 export interface DecodedJournal {
   records: JournalRecord[]
@@ -116,7 +127,14 @@ function parseRecord(line: string): JournalRecord | null {
   }
   if (typeof value !== 'object' || value === null) return null
   const type = (value as { type?: unknown }).type
-  if (type !== 'header' && type !== 'sample' && type !== 'lactate' && type !== 'event' && type !== 'closed') {
+  if (
+    type !== 'header' &&
+    type !== 'sample' &&
+    type !== 'lactate' &&
+    type !== 'event' &&
+    type !== 'closed' &&
+    type !== 'reopened'
+  ) {
     return null
   }
   return value as JournalRecord
@@ -125,8 +143,21 @@ function parseRecord(line: string): JournalRecord | null {
 export const headerOf = (records: readonly JournalRecord[]): JournalHeader | null =>
   (records.find((r) => r.type === 'header') as JournalHeader | undefined) ?? null
 
-export const isClosed = (records: readonly JournalRecord[]): boolean =>
-  records.some((r) => r.type === 'closed')
+/**
+ * Whether the session is finished *as of the end of the journal*.
+ *
+ * Not "does a close record exist": a session can be finished, reopened and
+ * recorded into again, and the file keeps every one of those events. The last
+ * lifecycle record is the one that describes the session now.
+ */
+export function isClosed(records: readonly JournalRecord[]): boolean {
+  let closed = false
+  for (const record of records) {
+    if (record.type === 'closed') closed = true
+    else if (record.type === 'reopened') closed = false
+  }
+  return closed
+}
 
 /** Time of the last recorded sample, for seeding a resumed runner. */
 export function lastSampleTime(records: readonly JournalRecord[]): number | null {
@@ -167,6 +198,11 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
       }
       case 'closed':
         endedAt = record.endedAt
+        break
+      case 'reopened':
+        // Recording resumed, so the session has no end time again until it is
+        // closed a second time.
+        endedAt = undefined
         break
       default:
         break
@@ -234,6 +270,7 @@ export function summarise(records: readonly JournalRecord[]): SessionSummary | n
     if (record.type === 'sample') sampleCount += 1
     else if (record.type === 'lactate') lactateSteps.set(record.stepIndex, !record.removed)
     else if (record.type === 'closed') endedAt = record.endedAt
+    else if (record.type === 'reopened') endedAt = undefined
   }
   return {
     id: header.id,

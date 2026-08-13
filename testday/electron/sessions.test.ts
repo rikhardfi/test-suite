@@ -100,6 +100,29 @@ describe('SessionStore', () => {
     expect(store.resumePoint('session_1')).toBe(2)
   })
 
+  it('reopens a finished session and records into it again', () => {
+    const open = store.begin(header())
+    open.writer.append(sample(1))
+    open.writer.append({ type: 'closed', endedAt: STARTED_AT + 1000, sampleCount: 1 })
+    open.writer.close()
+    store.refreshMeta(open.dir)
+    expect(store.list()[0].closed).toBe(true)
+
+    // What the resume handler does for an already-closed journal.
+    const again = store.reopen('session_1')!
+    again.open.writer.append({ type: 'reopened', at: STARTED_AT + 2000 })
+    again.open.writer.append(sample(2))
+    again.open.writer.close()
+    store.refreshMeta(again.open.dir)
+
+    const summary = store.list()[0]
+    expect(summary.closed).toBe(false)
+    expect(summary.sampleCount).toBe(2)
+    expect(summary.endedAt).toBeUndefined()
+    // The original close record is still in the file: nothing was rewritten.
+    expect(store.read('session_1')?.samples.map((s) => s.t)).toEqual([1, 2])
+  })
+
   it('recovers a session whose journal was cut mid-write', () => {
     const open = store.begin(header())
     for (let t = 1; t <= 10; t++) open.writer.append(sample(t))

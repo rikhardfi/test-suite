@@ -17,7 +17,16 @@ import {
   sessionToTcx,
 } from '../model/export'
 
-export function Analysis({ protocols, recorder }: { protocols: Protocol[]; recorder: Recorder }) {
+export function Analysis({
+  protocols,
+  recorder,
+  onResume,
+}: {
+  protocols: Protocol[]
+  recorder: Recorder
+  /** Reopens a session for recording, finished or not. */
+  onResume: (summary: SessionSummary) => void
+}) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [session, setSession] = useState<SessionRecord | null>(null)
@@ -83,6 +92,10 @@ export function Analysis({ protocols, recorder }: { protocols: Protocol[]; recor
           key={session.id}
           session={session}
           protocols={protocols}
+          onResume={() => {
+            const summary = sessions.find((s) => s.id === session.id)
+            if (summary) onResume(summary)
+          }}
           onLactate={async (entry) => {
             const updated = await recorder.amendLactate(session.id, entry)
             if (updated) setSession(updated)
@@ -106,11 +119,13 @@ function SessionDetail({
   session,
   protocols,
   onLactate,
+  onResume,
   onDelete,
 }: {
   session: SessionRecord
   protocols: Protocol[]
   onLactate: (entry: LactateEntry) => void | Promise<void>
+  onResume: () => void
   onDelete: () => void
 }) {
   const isRun = session.sport === 'run'
@@ -169,6 +184,10 @@ function SessionDetail({
           </p>
         </div>
         <div className="row">
+          {/* Any session can be reopened, finished or interrupted. */}
+          <button className="primary" onClick={onResume} title="Reopen this session and record into it again">
+            Resume
+          </button>
           <button onClick={() => download(sessionFilename(session, 'csv'), samplesToCsv(session), 'text/csv')}>
             Samples CSV
           </button>

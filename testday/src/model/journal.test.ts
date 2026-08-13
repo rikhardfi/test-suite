@@ -102,6 +102,65 @@ describe('session state', () => {
     expect(isClosed(records)).toBe(true)
   })
 
+  it('reports a reopened session as open again', () => {
+    const { records } = decodeJournal(
+      encodeRecords([
+        header(),
+        sample(1),
+        { type: 'closed', endedAt: 10, sampleCount: 1 },
+        { type: 'reopened', at: 20 },
+      ]),
+    )
+    expect(isClosed(records)).toBe(false)
+  })
+
+  it('reports a session closed again after being reopened as closed', () => {
+    const { records } = decodeJournal(
+      encodeRecords([
+        header(),
+        { type: 'closed', endedAt: 10, sampleCount: 1 },
+        { type: 'reopened', at: 20 },
+        sample(2),
+        { type: 'closed', endedAt: 30, sampleCount: 2 },
+      ]),
+    )
+    // The last lifecycle record wins; the earlier ones stay in the file.
+    expect(isClosed(records)).toBe(true)
+  })
+
+  it('clears the end time when a finished session is reopened', () => {
+    const session = recordsToSession([
+      header(),
+      sample(1),
+      { type: 'closed', endedAt: 10, sampleCount: 1 },
+      { type: 'reopened', at: 20 },
+      sample(2),
+    ])
+    expect(session?.endedAt).toBeUndefined()
+    expect(session?.samples.map((s) => s.t)).toEqual([1, 2])
+  })
+
+  it('restores the end time when the reopened session is closed again', () => {
+    const session = recordsToSession([
+      header(),
+      { type: 'closed', endedAt: 10, sampleCount: 1 },
+      { type: 'reopened', at: 20 },
+      { type: 'closed', endedAt: 30, sampleCount: 2 },
+    ])
+    expect(session?.endedAt).toBe(30)
+  })
+
+  it('summarises a reopened session as not closed', () => {
+    const summary = summarise([
+      header(),
+      sample(1),
+      { type: 'closed', endedAt: 10, sampleCount: 1 },
+      { type: 'reopened', at: 20 },
+    ])
+    expect(summary?.closed).toBe(false)
+    expect(summary?.endedAt).toBeUndefined()
+  })
+
   it('finds the last sample time for seeding a resume', () => {
     expect(lastSampleTime([header(), sample(1), sample(7)])).toBe(7)
     expect(lastSampleTime([header()])).toBeNull()

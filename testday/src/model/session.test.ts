@@ -278,6 +278,43 @@ describe('TestRunner resume', () => {
     expect(Math.round(snapshot.elapsedS)).toBe(record.samples.at(-1)!.t)
   })
 
+  it('comes back paused even when the protocol already ran to the end', () => {
+    const p = protocol()
+    const first = runnerFor(p)
+    first.start()
+    // 3 steps of 90 s each: 400 s is past the end of the protocol.
+    for (let i = 0; i < 400 * 5; i++) vi.advanceTimersByTime(200)
+    const record = first.toRecord('session_1')
+    first.dispose()
+
+    const second = runnerFor(p)
+    second.resumeFrom(record)
+    const snapshot = second.snapshot()
+
+    // Finished would be unreopenable: `toggle()` refuses to start a finished
+    // runner, so the dashboard's start button would do nothing.
+    expect(snapshot.state).toBe('paused')
+    expect(snapshot.stepIndex).toBe(p.steps.length - 1)
+    second.toggle()
+    expect(second.snapshot().state).toBe('running')
+  })
+
+  it('comes back paused when there is nothing recorded yet', () => {
+    const p = protocol()
+    const runner = runnerFor(p)
+    runner.resumeFrom({
+      id: 'session_empty',
+      protocolId: p.id,
+      protocolName: p.name,
+      sport: p.sport,
+      athlete: DEFAULT_ATHLETE,
+      startedAt: 1,
+      samples: [],
+      lactate: [],
+    })
+    expect(runner.snapshot().state).toBe('paused')
+  })
+
   it('does not replay restored samples to the recorder', () => {
     const p = protocol()
     const first = runnerFor(p)

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { JournalWriter } from './journal'
-import { SessionStore, type OpenSession } from './sessions'
+import { SessionStore, isClosed, type OpenSession } from './sessions'
 import { IPC, type CloseResult, type StoragePaths, type WriteStatus } from './ipc'
 import type { JournalEvent, JournalHeader } from '../src/model/journal'
 import type { LactateEntry, Sample, SessionRecord } from '../src/model/session'
@@ -272,6 +272,12 @@ function registerHandlers(): void {
     if (!reopened) return null
     active = reopened.open
     holdSleep()
+    // A finished session gets an explicit reopen record, so the close record
+    // that is already in the file stops describing the session's current state.
+    // Nothing is rewritten; the later record simply wins on read.
+    if (isClosed(reopened.records)) {
+      guardedAppend(() => active!.writer.append({ type: 'reopened', at: Date.now() }))
+    }
     guardedAppend(() =>
       active!.writer.append({ type: 'event', kind: 'resumedFromDisk', at: Date.now() }),
     )

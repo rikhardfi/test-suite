@@ -7,8 +7,9 @@ import { Settings } from './ui/Settings'
 import { SensorManager } from './ble/manager'
 import { DEFAULT_ATHLETE, newId, type Athlete, type Protocol } from './model/protocol'
 import { builtInProtocols } from './model/presets'
+import { protocolDurationS } from './model/protocol'
 import { TestRunner, type SessionRecord } from './model/session'
-import { mmpCurve } from './model/metrics'
+import { formatClock, mmpCurve } from './model/metrics'
 import { createRecorder, isDesktop } from './model/recorder.create'
 import { IDLE_STATUS, headerFor, type RecorderStatus } from './model/recorder'
 import type { SessionSummary } from './model/journal'
@@ -37,6 +38,8 @@ const DEFAULT_SETTINGS: SettingsShape = {
 interface ResumeRequest {
   session: SessionRecord
   protocolId: string
+  /** Protocol seconds left after the last recorded sample. */
+  remainingS: number
 }
 
 export default function App() {
@@ -167,26 +170,41 @@ export default function App() {
     if (!resumeRequest || !runner || !activeProtocol) return
     if (activeProtocol.id !== resumeRequest.protocolId) return
     runner.resumeFrom(resumeRequest.session)
+    const { remainingS } = resumeRequest
     setResumeRequest(null)
     setView('run')
-    setToast('Session restored. It is paused; start when the athlete is ready.')
+    setToast(
+      remainingS > 0
+        ? `Session restored, paused with ${formatClock(remainingS)} of the protocol left. Start when the athlete is ready.`
+        : 'Session restored, but the protocol already ran to the end. Jump to a step in the lap table to record more into it.',
+    )
   }, [resumeRequest, runner, activeProtocol])
 
-  const resumeSession = async (summary: SessionSummary) => {
+  /**
+   * Reopens a session for recording: interrupted or finished, from the banner or
+   * from the analysis list. A finished one gets an explicit reopen record in its
+   * journal, so its earlier close record stops describing its current state.
+   */
+  const resumeSession = async (summary: Pick<SessionSummary, 'id' | 'protocolName'>) => {
     const state = await recorder.resume(summary.id)
     if (!state) {
       setToast('That session could not be reopened.')
       return
     }
-    const target = protocols.find((p) => p.id === state.session.protocolId) ?? null
-    if (!target) {
+    // The journal header carries the protocol it was recorded against.
+    const protocol = protocols.find((p) => p.id === state.session.protocolId) ?? null
+    if (!protocol) {
       setToast(`The protocol for that session ("${summary.protocolName}") no longer exists.`)
       return
     }
     setInterrupted((all) => all.filter((s) => s.id !== summary.id))
-    setActiveProtocol(target)
-    setSettings((s) => ({ ...s, lastProtocolId: target.id }))
-    setResumeRequest({ session: state.session, protocolId: target.id })
+    setActiveProtocol(protocol)
+    setSettings((s) => ({ ...s, lastProtocolId: protocol.id }))
+    setResumeRequest({
+      session: state.session,
+      protocolId: protocol.id,
+      remainingS: Math.max(0, protocolDurationS(protocol) - (state.resumeFromS ?? 0)),
+    })
   }
 
   const finish = async () => {
@@ -300,7 +318,9 @@ export default function App() {
         />
       )}
 
-      {view === 'analysis' && <Analysis protocols={protocols} recorder={recorder} />}
+      {view === 'analysis' && (
+        <Analysis protocols={protocols} recorder={recorder} onResume={resumeSession} />
+      )}
 
       {view === 'settings' && (
         <Settings

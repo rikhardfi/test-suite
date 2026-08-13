@@ -1084,3 +1084,20 @@ label.check input {
 .block {
   display: block;
 }
+
+/* A duration field mid-edit that does not yet parse. Marked rather than
+   rejected: "4:" is a legitimate state on the way to "4:30", and refusing the
+   keystroke would be worse than showing that it is not finished. */
+input.invalid {
+  border-color: var(--warn, #ff922d);
+}
+.input-with-suffix {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.input-with-suffix em {
+  font-style: normal;
+  color: var(--muted);
+  font-size: 12px;
+}

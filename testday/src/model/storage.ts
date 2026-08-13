@@ -83,6 +83,15 @@ export interface Settings {
    * means the defaults for that sport.
    */
   dashboardTiles?: { bike?: string[]; run?: string[] }
+  /**
+   * Sensors paired on this machine and which metric each was assigned to.
+   * Re-deciding this at the start of every test day is the kind of setup that
+   * gets skipped once and then yields a trace from the wrong device.
+   */
+  sensors?: {
+    known?: { id: string; name: string; profileKey: string }[]
+    preferred?: Record<string, string>
+  }
 }
 
 /** Made once per machine, on first use, and then left alone. */

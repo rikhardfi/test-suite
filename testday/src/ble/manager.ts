@@ -228,7 +228,98 @@ export class SensorManager {
   setPreferredSource(metric: MetricKey, deviceId: string | null): void {
     if (deviceId) this.preferred.set(metric, deviceId)
     else this.preferred.delete(metric)
+    this.onPreferencesChanged?.(this.preferences)
     this.emit()
+  }
+
+  /**
+   * Told when the operator's source assignments change, so they can be kept.
+   *
+   * Re-deciding which strap owns heart rate at the start of every test day is
+   * exactly the kind of setup that gets skipped once and then produces a trace
+   * from the wrong device.
+   */
+  onPreferencesChanged?: (preferences: Record<string, string>) => void
+
+  get preferences(): Record<string, string> {
+    return Object.fromEntries(this.preferred)
+  }
+
+  /** Restores assignments saved from a previous run. */
+  restorePreferences(preferences: Record<string, string>): void {
+    this.preferred = new Map(Object.entries(preferences) as [MetricKey, string][])
+    this.emit()
+  }
+
+  /**
+   * Devices worth offering to reconnect next time.
+   *
+   * Only the identity and the role are kept. Web Bluetooth will not reconnect
+   * from an id alone without the permission the browser already holds, so this
+   * is an offer to the operator rather than something that happens silently.
+   */
+  get knownDevices(): { id: string; name: string; profileKey: string }[] {
+    return [...this.entries.values()]
+      .filter((entry) => entry.profile)
+      .map((entry) => ({
+        id: entry.device.id,
+        name: entry.device.name,
+        profileKey: entry.profile!.key,
+      }))
+  }
+
+  /**
+   * Reconnects devices the browser has already been granted access to.
+   *
+   * `getDevices` returns exactly those, so nothing here can pair something new
+   * or reach a device the operator has not already approved.
+   */
+  async reconnectKnown(saved: { id: string; profileKey: string }[]): Promise<number> {
+    if (!navigator.bluetooth?.getDevices) return 0
+    let reconnected = 0
+    let granted: BluetoothDevice[] = []
+    try {
+      granted = await navigator.bluetooth.getDevices()
+    } catch {
+      return 0
+    }
+
+    for (const entry of saved) {
+      if (this.entries.has(entry.id)) continue
+      const device = granted.find((d) => d.id === entry.id)
+      const profile = SENSOR_PROFILES.find((p) => p.key === entry.profileKey)
+      if (!device || !profile) continue
+
+      const sensor: SensorDevice = {
+        id: entry.id,
+        name: device.name ?? profile.label,
+        kind: profile.kind,
+        provides: profile.provides,
+        state: 'connecting',
+        disconnect: () => this.entries.get(entry.id)?.gattDevice?.gatt?.disconnect(),
+      }
+      const held: Entry = { device: sensor, values: new Map(), gattDevice: device, profile }
+      this.entries.set(entry.id, held)
+      device.addEventListener('gattserverdisconnected', () => {
+        held.ftms?.forgetControl()
+        sensor.state = 'reconnecting'
+        this.emit()
+        void this.reconnect(held, profile)
+      })
+
+      try {
+        await this.openSession(held, profile)
+        sensor.state = 'connected'
+        reconnected += 1
+      } catch {
+        // Out of range or switched off. Left in the list as reconnecting, so
+        // the normal backoff picks it up rather than it vanishing silently.
+        sensor.state = 'reconnecting'
+        void this.reconnect(held, profile)
+      }
+      this.emit()
+    }
+    return reconnected
   }
 
   getPreferredSource(metric: MetricKey): string | null {

@@ -57,7 +57,14 @@ export function lapsToCsv(laps: readonly Lap[]): string {
     'max_hr_bpm',
     'avg_cadence_rpm',
     'avg_speed_kph',
+    'avg_incline_pct',
+    'distance_m',
+    'normalized_power_w',
+    'work_kj',
+    'kcal',
+    'avg_vo2_ml_kg_min',
     'lactate_mmol',
+    'rpe_borg',
   ]
   const rows = laps.map((lap) =>
     [
@@ -72,7 +79,14 @@ export function lapsToCsv(laps: readonly Lap[]): string {
       lap.maxHeartRate ?? '',
       lap.avgCadence ?? '',
       lap.avgSpeedMs ? (lap.avgSpeedMs * 3.6).toFixed(2) : '',
+      lap.avgInclinePct ?? '',
+      lap.distanceM ?? '',
+      lap.normalizedPower != null ? Math.round(lap.normalizedPower) : '',
+      lap.workKj ?? '',
+      lap.kcal ?? '',
+      lap.avgVo2 ?? '',
       lap.lactate ?? '',
+      lap.rpe ?? '',
     ].join(','),
   )
   return [header.join(','), ...rows].join('\n')

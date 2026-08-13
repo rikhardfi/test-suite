@@ -12,6 +12,7 @@ import { planPowerSeries, stepLabel, type Athlete, type Protocol } from '../mode
 import { lapsFromSamples, type TestRunner } from '../model/session'
 import type { RecorderStatus } from '../model/recorder'
 import type { SensorManager } from '../ble/manager'
+import { Modal } from './Modal'
 
 interface Props {
   runner: TestRunner
@@ -418,8 +419,7 @@ function LactateDialog({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <form className="modal narrow" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+    <Modal onClose={onClose} className="narrow" as="form" onSubmit={submit}>
         <h2>Lactate — {stepName}</h2>
         <label>
           Blood lactate (mmol/L)
@@ -450,8 +450,7 @@ function LactateDialog({
             Save
           </button>
         </div>
-      </form>
-    </div>
+    </Modal>
   )
 }
 

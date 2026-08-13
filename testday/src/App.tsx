@@ -82,6 +82,45 @@ export default function App() {
 
   useEffect(() => recorder.onStatus(setStatus), [recorder])
 
+  /**
+   * Sensors are remembered between runs: which ones were paired, and which
+   * metric each was assigned to. Reconnection is offered rather than done
+   * silently, and only for devices the browser has already been granted access
+   * to, so nothing here can reach hardware the operator never approved.
+   */
+  useEffect(() => {
+    manager.restorePreferences(settings.sensors?.preferred ?? {})
+    manager.onPreferencesChanged = (preferred) =>
+      setSettings((s) => ({ ...s, sensors: { ...s.sensors, preferred } }))
+    return () => {
+      manager.onPreferencesChanged = undefined
+    }
+    // Restored once, from what was on disk at boot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manager])
+
+  // Keep the paired list current, so the next launch has something to offer.
+  useEffect(() => {
+    const known = manager.knownDevices
+    if (known.length === 0) return
+    setSettings((s) =>
+      JSON.stringify(s.sensors?.known) === JSON.stringify(known)
+        ? s
+        : { ...s, sensors: { ...s.sensors, known } },
+    )
+  }, [manager, status.recording])
+
+  const reconnectSensors = useCallback(async () => {
+    const known = settings.sensors?.known ?? []
+    if (known.length === 0) return
+    const count = await manager.reconnectKnown(known)
+    setToast(
+      count > 0
+        ? `Reconnected ${count} sensor(s) from last time.`
+        : 'None of the remembered sensors answered. Pair them from the sensor panel.',
+    )
+  }, [manager, settings.sensors?.known])
+
   // A dropped sensor is chased indefinitely while a test is running, and only
   // for a bounded number of attempts when nothing is being recorded.
   useEffect(() => {
@@ -403,7 +442,13 @@ export default function App() {
       )}
 
       {sensorsOpen && (
-        <SensorPanel manager={manager} ftpWatts={settings.athlete.ftpWatts} onClose={() => setSensorsOpen(false)} />
+        <SensorPanel
+          manager={manager}
+          ftpWatts={settings.athlete.ftpWatts}
+          rememberedCount={settings.sensors?.known?.length ?? 0}
+          onReconnectRemembered={() => void reconnectSensors()}
+          onClose={() => setSensorsOpen(false)}
+        />
       )}
 
       {environmentOpen && (

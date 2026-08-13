@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { defaultFrontFor, tilesForSport } from './tiles'
 import type { Sport } from '../model/protocol'
+import { Modal } from './Modal'
 
 /**
  * Chooses which tiles the front face shows, and in what order.
@@ -41,8 +42,7 @@ export function TilePicker({
     })
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={onClose} className="wide">
         <h2>Dashboard tiles</h2>
         <p className="muted small">
           These appear on the front face, in this order. The flip side always shows everything the
@@ -125,7 +125,6 @@ export function TilePicker({
             Save
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

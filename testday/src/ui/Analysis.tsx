@@ -397,6 +397,11 @@ function syntheticLaps(session: SessionRecord) {
     const target = work.find((s) => s.targetPower != null)?.targetPower ?? null
     const avgPower = avg((s) => s.power)
     const avgSpeed = avg((s) => s.speedMs)
+    const powers = work.map((s) => s.power).filter((v): v is number => v != null)
+    const distances = work.map((s) => s.distanceM).filter((v): v is number => v != null)
+    const workJ = powers.reduce((a, b) => a + b, 0)
+    const avgVo2 = avg((s) => s.vo2Est)
+    const entry = session.lactate.find((l) => l.stepIndex === stepIndex)
     return {
       stepIndex,
       name: `Step ${stepIndex + 1}`,
@@ -409,7 +414,20 @@ function syntheticLaps(session: SessionRecord) {
       maxHeartRate: maxOf((s) => s.heartRate),
       avgCadence: avg((s) => s.cadence) != null ? Math.round(avg((s) => s.cadence) as number) : null,
       avgSpeedMs: avgSpeed != null ? Number(avgSpeed.toFixed(2)) : null,
-      lactate: session.lactate.find((l) => l.stepIndex === stepIndex)?.mmol,
+      distanceM: distances.length
+        ? Number((distances[distances.length - 1] - distances[0]).toFixed(1))
+        : null,
+      normalizedPower: normalizedPower(powers),
+      workKj: powers.length ? Number((workJ / 1000).toFixed(1)) : null,
+      kcal: avgVo2 != null
+        ? Math.round(((avgVo2 * session.athlete.massKg) / 1000) * 5 * (work.length / 60))
+        : powers.length
+          ? Math.round(workJ / 1000 / 4.184 / 0.22)
+          : null,
+      avgVo2: avgVo2 != null ? Number(avgVo2.toFixed(1)) : null,
+      avgInclinePct: avg((s) => s.inclinePct),
+      lactate: entry?.mmol,
+      rpe: entry?.rpe,
     }
   })
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Environment } from '../model/session'
 import type { MetricUpdate } from '../ble/types'
+import { Modal } from './Modal'
 
 /**
  * Conditions the test was run in.
@@ -70,8 +71,7 @@ export function EnvironmentForm({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <form className="modal narrow" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+    <Modal onClose={onClose} className="narrow" as="form" onSubmit={submit}>
         <h2>Conditions</h2>
         <p className="muted small">
           {sensed
@@ -154,8 +154,7 @@ export function EnvironmentForm({
             Save
           </button>
         </div>
-      </form>
-    </div>
+    </Modal>
   )
 }
 

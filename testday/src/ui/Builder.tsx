@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { DurationCell, NumberCell, DurationField, NumberField } from './inputs'
 import { formatClock } from '../model/metrics'
 import {
   DEFAULT_RECOVERY,
@@ -21,6 +22,7 @@ import {
   type Step,
 } from '../model/protocol'
 import { computeVo2 } from '../model/vo2'
+import { Modal } from './Modal'
 
 interface Props {
   protocols: Protocol[]
@@ -181,8 +183,6 @@ function GeneratorDialog({
     setRecoveryS: 300,
   })
 
-  const set = (key: keyof typeof values) => (event: React.ChangeEvent<HTMLInputElement>) =>
-    setValues((v) => ({ ...v, [key]: Number(event.target.value) }))
 
   const create = () => {
     let steps: Step[]
@@ -236,8 +236,7 @@ function GeneratorDialog({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={onClose} className="narrow">
         <h2>New protocol</h2>
         <div className="segmented">
           {(
@@ -257,46 +256,50 @@ function GeneratorDialog({
         <div className="field-grid">
           {template === 'intervals' && (
             <>
-              <Field label="Reps per set" value={values.reps} onChange={set('reps')} />
-              <Field label="Work (s)" value={values.onDurationS} onChange={set('onDurationS')} />
-              <Field label="Work (% FTP)" value={values.onPctFtp} onChange={set('onPctFtp')} />
-              <Field label="Rest (s)" value={values.offDurationS} onChange={set('offDurationS')} />
-              <Field label="Rest (% FTP)" value={values.offPctFtp} onChange={set('offPctFtp')} />
-              <Field label="Sets" value={values.sets} onChange={set('sets')} />
-              <Field
-                label="Between sets (s, 0 = none)"
-                value={values.setRecoveryS}
-                onChange={set('setRecoveryS')}
+              <NumberField label="Reps per set" value={values.reps} onChange={(v) => setValues((c) => ({ ...c, reps: v }))} />
+              <DurationField
+                label="Work"
+                seconds={values.onDurationS}
+                onChange={(v) => setValues((c) => ({ ...c, onDurationS: v }))}
               />
+              <NumberField label="Work (% FTP)" value={values.onPctFtp} onChange={(v) => setValues((c) => ({ ...c, onPctFtp: v }))} />
+              <DurationField
+                label="Rest"
+                seconds={values.offDurationS}
+                onChange={(v) => setValues((c) => ({ ...c, offDurationS: v }))}
+              />
+              <NumberField label="Rest (% FTP)" value={values.offPctFtp} onChange={(v) => setValues((c) => ({ ...c, offPctFtp: v }))} />
+              <NumberField label="Sets" value={values.sets} onChange={(v) => setValues((c) => ({ ...c, sets: v }))} />
+              <DurationField label="Recovery between sets" seconds={values.setRecoveryS} onChange={(v) => setValues((c) => ({ ...c, setRecoveryS: v }))} />
             </>
           )}
           {template === 'intervals' ? null : template === 'runStep' ? (
             <>
-              <Field label="Start speed (km/h)" value={values.startKph} onChange={set('startKph')} step={0.5} />
-              <Field label="Increment (km/h)" value={values.stepKph} onChange={set('stepKph')} step={0.5} />
-              <Field label="Gradient (%)" value={values.inclinePct} onChange={set('inclinePct')} step={0.5} />
+              <NumberField label="Start speed (km/h)" value={values.startKph} onChange={(v) => setValues((c) => ({ ...c, startKph: v }))} step={0.5} />
+              <NumberField label="Increment (km/h)" value={values.stepKph} onChange={(v) => setValues((c) => ({ ...c, stepKph: v }))} step={0.5} />
+              <NumberField label="Gradient (%)" value={values.inclinePct} onChange={(v) => setValues((c) => ({ ...c, inclinePct: v }))} step={0.5} />
             </>
           ) : (
-            <Field label="Start power (W)" value={values.startWatts} onChange={set('startWatts')} />
+            <NumberField label="Start power (W)" value={values.startWatts} onChange={(v) => setValues((c) => ({ ...c, startWatts: v }))} />
           )}
 
           {template === 'ramp' ? (
             <>
-              <Field label="Ramp rate (W/min)" value={values.wattsPerMinute} onChange={set('wattsPerMinute')} />
-              <Field label="Ramp duration (s)" value={values.rampDurationS} onChange={set('rampDurationS')} />
+              <NumberField label="Ramp rate (W/min)" value={values.wattsPerMinute} onChange={(v) => setValues((c) => ({ ...c, wattsPerMinute: v }))} />
+              <DurationField label="Ramp duration" seconds={values.rampDurationS} onChange={(v) => setValues((c) => ({ ...c, rampDurationS: v }))} />
             </>
           ) : (
             <>
               {template === 'bikeStep' && (
-                <Field label="Increment (W)" value={values.stepWatts} onChange={set('stepWatts')} />
+                <NumberField label="Increment (W)" value={values.stepWatts} onChange={(v) => setValues((c) => ({ ...c, stepWatts: v }))} />
               )}
-              <Field label="Step duration (s)" value={values.stepDurationS} onChange={set('stepDurationS')} />
-              <Field label="Number of steps" value={values.stepCount} onChange={set('stepCount')} />
-              <Field label="Sample break (s, 0 = none)" value={values.sampleBreakS} onChange={set('sampleBreakS')} />
+              <DurationField label="Step duration" seconds={values.stepDurationS} onChange={(v) => setValues((c) => ({ ...c, stepDurationS: v }))} />
+              <NumberField label="Number of steps" value={values.stepCount} onChange={(v) => setValues((c) => ({ ...c, stepCount: v }))} />
+              <DurationField label="Sample break" seconds={values.sampleBreakS} onChange={(v) => setValues((c) => ({ ...c, sampleBreakS: v }))} />
             </>
           )}
           {template === 'bikeStep' && (
-            <Field label="Warm-up (s, 0 = none)" value={values.warmupDurationS} onChange={set('warmupDurationS')} />
+            <DurationField label="Warm-up" seconds={values.warmupDurationS} onChange={(v) => setValues((c) => ({ ...c, warmupDurationS: v }))} />
           )}
         </div>
 
@@ -308,8 +311,7 @@ function GeneratorDialog({
             Create
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -386,8 +388,7 @@ function StepEditor({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={onClose} className="wide">
         <h2>Edit protocol</h2>
         <div className="field-grid">
           <label>
@@ -420,14 +421,11 @@ function StepEditor({
                 <option value="ftp">% of FTP</option>
                 <option value="watts">watts</option>
               </select>
-              <input
-                type="number"
+              <NumberCell
                 value={recovery.mode === 'watts' ? recovery.watts : recovery.pctFtp}
-                onChange={(e) =>
+                onChange={(v) =>
                   setRecovery(
-                    recovery.mode === 'watts'
-                      ? { mode: 'watts', watts: Number(e.target.value) }
-                      : { mode: 'ftp', pctFtp: Number(e.target.value) },
+                    recovery.mode === 'watts' ? { mode: 'watts', watts: v } : { mode: 'ftp', pctFtp: v },
                   )
                 }
               />
@@ -467,10 +465,9 @@ function StepEditor({
                     <input value={step.name ?? ''} onChange={(e) => update(index, { name: e.target.value })} />
                   </td>
                   <td>
-                    <input
-                      type="number"
-                      value={step.durationS}
-                      onChange={(e) => update(index, { durationS: Number(e.target.value) })}
+                    <DurationCell
+                      seconds={step.durationS}
+                      onChange={(v) => update(index, { durationS: v })}
                     />
                   </td>
                   {isRun && (
@@ -488,11 +485,10 @@ function StepEditor({
                     {isRun ? (
                       step.target.mode === 'vo2' ? (
                         <div className="row nowrap">
-                          <input
-                            type="number"
+                          <NumberCell
                             step={0.5}
                             value={step.target.vo2}
-                            onChange={(e) => setVo2(index, Number(e.target.value))}
+                            onChange={(v) => setVo2(index, v)}
                           />
                           {/* The solved speed is what the treadmill is sent. */}
                           <span className="muted small nowrap">
@@ -500,16 +496,14 @@ function StepEditor({
                           </span>
                         </div>
                       ) : (
-                        <input
-                          type="number"
+                        <NumberCell
                           step={0.1}
                           value={step.target.mode === 'speed' ? step.target.kph : 0}
-                          onChange={(e) => setKph(index, Number(e.target.value))}
+                          onChange={(v) => setKph(index, v)}
                         />
                       )
                     ) : (
-                      <input
-                        type="number"
+                      <NumberCell
                         value={
                           step.target.mode === 'watts'
                             ? step.target.watts
@@ -517,25 +511,23 @@ function StepEditor({
                               ? Math.round((step.target.pctFtp / 100) * athlete.ftpWatts)
                               : 0
                         }
-                        onChange={(e) => setWatts(index, Number(e.target.value))}
+                        onChange={(v) => setWatts(index, v)}
                       />
                     )}
                   </td>
                   {isRun && (
                     <td>
-                      <input
-                        type="number"
+                      <NumberCell
                         step={0.5}
                         value={stepInclinePct(step) ?? 0}
-                        onChange={(e) => setIncline(index, Number(e.target.value))}
+                        onChange={(v) => setIncline(index, v)}
                       />
                     </td>
                   )}
                   <td>
-                    <input
-                      type="number"
-                      value={step.recoveryS ?? 0}
-                      onChange={(e) => update(index, { recoveryS: Number(e.target.value) || undefined })}
+                    <DurationCell
+                      seconds={step.recoveryS ?? 0}
+                      onChange={(v) => update(index, { recoveryS: v || undefined })}
                     />
                   </td>
                   <td>
@@ -547,7 +539,7 @@ function StepEditor({
                       onChange={(e) =>
                         update(index, {
                           recoveryTarget: e.target.value
-                            ? { mode: 'watts', watts: Number(e.target.value) }
+                            ? { mode: 'watts', watts: 0 }
                             : undefined,
                         })
                       }
@@ -593,30 +585,27 @@ function StepEditor({
 
         <div className="row repeat-bar">
           <span className="muted small">Repeat steps</span>
-          <input
-            type="number"
+          <NumberCell
             className="inline"
             min={1}
             max={draft.steps.length}
             value={repeat.from}
-            onChange={(e) => setRepeat((r) => ({ ...r, from: Number(e.target.value) }))}
+            onChange={(v) => setRepeat((r) => ({ ...r, from: v }))}
           />
           <span className="muted small">to</span>
-          <input
-            type="number"
+          <NumberCell
             className="inline"
             min={1}
             max={draft.steps.length}
             value={repeat.to}
-            onChange={(e) => setRepeat((r) => ({ ...r, to: Number(e.target.value) }))}
+            onChange={(v) => setRepeat((r) => ({ ...r, to: v }))}
           />
           <span className="muted small">×</span>
-          <input
-            type="number"
+          <NumberCell
             className="inline"
             min={2}
             value={repeat.times}
-            onChange={(e) => setRepeat((r) => ({ ...r, times: Number(e.target.value) }))}
+            onChange={(v) => setRepeat((r) => ({ ...r, times: v }))}
           />
           <button
             disabled={repeat.times < 2 || repeat.from < 1 || repeat.to > draft.steps.length}
@@ -673,26 +662,7 @@ function StepEditor({
             Save protocol
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  step,
-}: {
-  label: string
-  value: number
-  onChange: (event: React.ChangeEvent<HTMLInputElement>) => void
-  step?: number
-}) {
-  return (
-    <label>
-      {label}
-      <input type="number" value={value} step={step ?? 1} onChange={onChange} />
-    </label>
-  )
-}

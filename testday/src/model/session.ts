@@ -10,7 +10,7 @@ import {
   type Protocol,
   type Step,
 } from './protocol'
-import { max, mean } from './metrics'
+import { max, mean, normalizedPower } from './metrics'
 import { estimateVo2, type Vo2Method } from './vo2'
 import type { MachineControl, MetricUpdate } from '../ble/types'
 
@@ -149,7 +149,18 @@ export interface Lap {
   maxHeartRate: number | null
   avgCadence: number | null
   avgSpeedMs: number | null
+  /** Metres covered during the step, from whichever odometer was in use. */
+  distanceM: number | null
+  /** Fourth-power weighted average, null for a step too short to have one. */
+  normalizedPower: number | null
+  /** Mechanical work, kJ. */
+  workKj: number | null
+  /** Energy cost, kcal, from the oxygen estimate where there is one. */
+  kcal: number | null
+  avgVo2: number | null
+  avgInclinePct: number | null
   lactate?: number
+  rpe?: number
 }
 
 export interface RunnerSnapshot {
@@ -709,6 +720,20 @@ export function lapsFromSamples(
     const cadence = pluck(stepSamples, 'cadence')
     const speed = pluck(stepSamples, 'speedMs')
     const targetWatts = targetWattsAt(step, step.durationS / 2, athlete.ftpWatts)
+    const distances = pluck(stepSamples, 'distanceM')
+    const vo2 = pluck(stepSamples, 'vo2Est')
+    const incline = pluck(stepSamples, 'inclinePct')
+    const entry = lactate.find((l) => l.stepIndex === index)
+
+    // Work is the integral of power over the step, which at 1 Hz is the sum in
+    // joules. Energy cost prefers the recorded oxygen estimate, so the number
+    // here and the number the dashboard showed are the same number.
+    const workJ = power.reduce((sum, watts) => sum + watts, 0)
+    const kcal = vo2.length
+      ? vo2.reduce((sum, value) => sum + (value * athlete.massKg) / 1000 / 60 * 5, 0)
+      : power.length
+        ? workJ / 1000 / 4.184 / 0.22
+        : 0
 
     return {
       stepIndex: index,
@@ -722,7 +747,14 @@ export function lapsFromSamples(
       maxHeartRate: hr.length ? Math.round(max(hr)) : null,
       avgCadence: cadence.length ? Math.round(mean(cadence)) : null,
       avgSpeedMs: speed.length ? Number(mean(speed).toFixed(2)) : null,
-      lactate: lactate.find((l) => l.stepIndex === index)?.mmol,
+      distanceM: distances.length ? Number((distances[distances.length - 1] - distances[0]).toFixed(1)) : null,
+      normalizedPower: normalizedPower(power),
+      workKj: power.length ? Number((workJ / 1000).toFixed(1)) : null,
+      kcal: kcal > 0 ? Math.round(kcal) : null,
+      avgVo2: vo2.length ? Number(mean(vo2).toFixed(1)) : null,
+      avgInclinePct: incline.length ? Number(mean(incline).toFixed(1)) : null,
+      lactate: entry?.mmol,
+      rpe: entry?.rpe,
     }
   })
 }

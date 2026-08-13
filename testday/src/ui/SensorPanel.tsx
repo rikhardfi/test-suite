@@ -5,6 +5,7 @@ import { BluetoothChooser, useBluetoothChooser } from './BluetoothChooser'
 import { useLiveMetrics, useSensorDevices } from './hooks'
 import { metricLabel } from '../ble/metrics'
 import type { MetricKey } from '../ble/types'
+import { Modal } from './Modal'
 
 
 const SOURCE_METRICS: { key: MetricKey; label: string }[] = [
@@ -17,10 +18,19 @@ const SOURCE_METRICS: { key: MetricKey; label: string }[] = [
 interface Props {
   manager: SensorManager
   ftpWatts: number
+  /** How many sensors were paired last time, so the offer can name a number. */
+  rememberedCount: number
+  onReconnectRemembered: () => void
   onClose: () => void
 }
 
-export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
+export function SensorPanel({
+  manager,
+  ftpWatts,
+  rememberedCount,
+  onReconnectRemembered,
+  onClose,
+}: Props) {
   const devices = useSensorDevices(manager)
   const metrics = useLiveMetrics(manager, 4)
   const [error, setError] = useState<string | null>(null)
@@ -84,8 +94,7 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={close}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={close}>
         <h2>Sensors</h2>
 
         {!supported && (
@@ -105,6 +114,17 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
             setConnecting(null)
           }}
         />
+
+        {rememberedCount > 0 && devices.length === 0 && (
+          <div className="row">
+            <button className="primary" onClick={onReconnectRemembered}>
+              Reconnect {rememberedCount} sensor{rememberedCount === 1 ? '' : 's'} from last time
+            </button>
+            <span className="muted small">
+              Only devices this machine has already been granted access to.
+            </span>
+          </div>
+        )}
 
         <div className="sensor-buttons">
           {SENSOR_PROFILES.map((profile) => (
@@ -235,7 +255,6 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
             Done
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

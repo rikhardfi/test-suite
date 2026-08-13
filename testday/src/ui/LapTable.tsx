@@ -40,6 +40,9 @@ export function LapTable({
             <th>Target</th>
             <th>Avg</th>
             <th>HR</th>
+            <th title="Distance covered during the step">Dist</th>
+            <th title="Mechanical work">kJ</th>
+            <th title="Energy cost, from the oxygen estimate where there is one">kcal</th>
             <th>La</th>
             <th>Left</th>
           </tr>
@@ -62,6 +65,9 @@ export function LapTable({
                 <td>{step ? stepLabel(step, athlete.ftpWatts) : '—'}</td>
                 <td>{lap.avgPower != null ? `${lap.avgPower} W` : '—'}</td>
                 <td>{lap.avgHeartRate ?? '—'}</td>
+                <td>{lap.distanceM != null ? `${(lap.distanceM / 1000).toFixed(2)} km` : '—'}</td>
+                <td>{lap.workKj ?? '—'}</td>
+                <td>{lap.kcal ?? '—'}</td>
                 <td>
                   <button className="cell-button" onClick={() => onLactate(index)}>
                     {lap.lactate != null ? lap.lactate.toFixed(1) : '+'}

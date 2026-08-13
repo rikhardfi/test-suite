@@ -1,0 +1,7 @@
+# Development only. The app itself contains no Python, has no runtime
+# dependencies beyond React, and makes no network requests.
+#
+# This decodes FIT files written by src/model/fit.ts using Garmin's own
+# profile, which is the only way to catch a field number that means something
+# other than what the encoder thought. See tools/verify_fit.py.
+fitdecode>=0.10,<1.0

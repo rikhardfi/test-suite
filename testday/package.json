@@ -15,13 +15,21 @@
     "electron:dev": "node electron/dev.mjs",
     "electron:build": "BASE_PATH=./ npm run build && node electron/build.mjs",
     "electron:start": "npm run electron:build && electron .",
-    "dist": "npm run electron:build && electron-builder --dir"
+    "dist": "npm run electron:build && electron-builder --dir",
+    "verify:fit": "vitest run src/model/fit.verify.test.ts",
+    "setup:tools": "python3 -m pip install -r tools/requirements.txt"
   },
   "build": {
     "appId": "fi.tuni.testday",
     "productName": "testday",
-    "directories": { "output": "release" },
-    "files": ["dist/**", "dist-electron/**", "package.json"],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
     "mac": {
       "category": "public.app-category.healthcare-fitness",
       "target": "dir",

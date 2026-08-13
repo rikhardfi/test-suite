@@ -195,8 +195,35 @@ with `SIGKILL` mid-recording, and checks that every sample the recorder acknowle
 no gaps: truncating a file by hand only tests the reader, not the durability claim.
 
 ```
-npm test    # 90 tests
+npm test    # 297 tests
 ```
+
+### Verifying the FIT output
+
+`fit.test.ts` decodes what the encoder wrote with a reader that shares none of its tables, which
+catches a definition message that disagrees with its data. What it structurally *cannot* catch is a
+wrong field number, because the encoder and that reader would be wrong together and agree perfectly.
+
+Only a decoder carrying Garmin's own profile can catch that, and it has already caught two bugs the
+unit tests passed clean: a `developer_data_id` whose field numbers were one apart, which made a
+strict decoder reject the entire file and every lactate value in it unreadable, and an offset
+applied after its scale rather than before, which turned an altitude of 0 m into -400 m.
+
+So it runs as part of `npm test`, and fails loudly rather than skipping when the toolchain is
+missing. A check that silently does not run is worse than no check, because it also tells you
+everything is fine.
+
+```bash
+python3 -m pip install -r tools/requirements.txt   # or: npm run setup:tools
+npm run verify:fit                                  # just this check
+SKIP_FIT_VERIFY=1 npm test                          # opt out, visibly
+```
+
+Python is a development dependency only. The app itself has no Python in it, no runtime
+dependencies beyond React, and still makes no network requests.
+
+**Re-run this whenever a message or field number in `src/model/fit.ts` changes.** The unit tests
+will not catch that class of mistake.
 
 ## Notes on the numbers
 

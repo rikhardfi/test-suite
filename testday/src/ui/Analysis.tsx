@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { LactateChart } from './LactateChart'
 import { MmpCurve } from './MmpCurve'
 import { COLORS } from './theme'
 import { formatClock, mmpCurve, normalizedPower, paceFromSpeed } from '../model/metrics'
 import { analyseLactate, criticalPower, type LactatePoint } from '../model/analysis'
-import { lapsFromSamples, type SessionRecord } from '../model/session'
+import { lapsFromSamples, type LactateEntry, type SessionRecord } from '../model/session'
 import type { Protocol } from '../model/protocol'
-import { deleteSession, listSessions, saveSession } from '../model/storage'
+import type { Recorder } from '../model/recorder'
+import type { SessionSummary } from '../model/journal'
 import {
   download,
   lapsToCsv,
@@ -16,27 +17,42 @@ import {
   sessionToTcx,
 } from '../model/export'
 
-export function Analysis({ protocols }: { protocols: Protocol[] }) {
-  const [sessions, setSessions] = useState<SessionRecord[]>([])
+export function Analysis({ protocols, recorder }: { protocols: Protocol[]; recorder: Recorder }) {
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [session, setSession] = useState<SessionRecord | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const all = await listSessions()
+      const all = await recorder.list()
       setSessions(all)
       setSelectedId((current) => current ?? all[0]?.id ?? null)
     } finally {
       setLoading(false)
     }
-  }
+  }, [recorder])
 
   useEffect(() => {
     void refresh()
-  }, [])
+  }, [refresh])
 
-  const session = sessions.find((s) => s.id === selectedId) ?? null
+  // Only the selected session's samples are read, so the list stays cheap on a
+  // machine that has recorded a whole season.
+  useEffect(() => {
+    let cancelled = false
+    if (!selectedId) {
+      setSession(null)
+      return
+    }
+    void recorder.read(selectedId).then((loaded) => {
+      if (!cancelled) setSession(loaded)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedId, recorder])
 
   return (
     <div className="page analysis">
@@ -52,8 +68,9 @@ export function Analysis({ protocols }: { protocols: Protocol[] }) {
                 <span className="muted small">
                   {new Date(item.startedAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
                   {' · '}
-                  {formatClock(item.samples.length)}
-                  {item.lactate.length ? ` · ${item.lactate.length} La` : ''}
+                  {formatClock(item.sampleCount)}
+                  {item.lactateCount ? ` · ${item.lactateCount} La` : ''}
+                  {item.closed ? '' : ' · interrupted'}
                 </span>
               </button>
             </li>
@@ -66,13 +83,15 @@ export function Analysis({ protocols }: { protocols: Protocol[] }) {
           key={session.id}
           session={session}
           protocols={protocols}
-          onChanged={async (updated) => {
-            await saveSession(updated)
-            setSessions((all) => all.map((s) => (s.id === updated.id ? updated : s)))
+          onLactate={async (entry) => {
+            const updated = await recorder.amendLactate(session.id, entry)
+            if (updated) setSession(updated)
+            await refresh()
           }}
           onDelete={async () => {
-            await deleteSession(session.id)
+            await recorder.discard(session.id)
             setSelectedId(null)
+            setSession(null)
             await refresh()
           }}
         />
@@ -86,12 +105,12 @@ export function Analysis({ protocols }: { protocols: Protocol[] }) {
 function SessionDetail({
   session,
   protocols,
-  onChanged,
+  onLactate,
   onDelete,
 }: {
   session: SessionRecord
   protocols: Protocol[]
-  onChanged: (session: SessionRecord) => void | Promise<void>
+  onLactate: (entry: LactateEntry) => void | Promise<void>
   onDelete: () => void
 }) {
   const isRun = session.sport === 'run'
@@ -166,8 +185,9 @@ function SessionDetail({
           >
             JSON
           </button>
-          <button className="ghost danger" onClick={onDelete}>
-            Delete
+          {/* Nothing is unlinked: the session is moved aside and stays recoverable. */}
+          <button className="ghost danger" onClick={onDelete} title="Moves the session out of this list. The files are kept.">
+            Remove
           </button>
         </div>
       </div>
@@ -281,20 +301,21 @@ function SessionDetail({
                         onBlur={(event) => {
                           const raw = event.target.value.replace(',', '.').trim()
                           const value = Number(raw)
-                          const others = session.lactate.filter((l) => l.stepIndex !== lap.stepIndex)
-                          const next =
-                            raw === '' || !Number.isFinite(value) || value <= 0
-                              ? others
-                              : [
-                                  ...others,
-                                  {
-                                    stepIndex: lap.stepIndex,
-                                    mmol: value,
-                                    heartRate: lap.avgHeartRate ?? undefined,
-                                    at: Date.now(),
-                                  },
-                                ]
-                          void onChanged({ ...session, lactate: next })
+                          const cleared = raw === '' || !Number.isFinite(value) || value <= 0
+                          const current = session.lactate.find((l) => l.stepIndex === lap.stepIndex)
+                          // Nothing to record when an empty field is left empty.
+                          if (cleared && !current) return
+                          if (!cleared && current?.mmol === value) return
+                          void onLactate(
+                            cleared
+                              ? { stepIndex: lap.stepIndex, mmol: 0, at: Date.now(), removed: true }
+                              : {
+                                  stepIndex: lap.stepIndex,
+                                  mmol: value,
+                                  heartRate: lap.avgHeartRate ?? undefined,
+                                  at: Date.now(),
+                                },
+                          )
                         }}
                       />
                     </td>

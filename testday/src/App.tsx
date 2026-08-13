@@ -7,26 +7,36 @@ import { Settings } from './ui/Settings'
 import { SensorManager } from './ble/manager'
 import { DEFAULT_ATHLETE, newId, type Athlete, type Protocol } from './model/protocol'
 import { builtInProtocols } from './model/presets'
-import { TestRunner } from './model/session'
+import { TestRunner, type SessionRecord } from './model/session'
 import { mmpCurve } from './model/metrics'
+import { createRecorder, isDesktop } from './model/recorder.create'
+import { IDLE_STATUS, headerFor, type RecorderStatus } from './model/recorder'
+import type { SessionSummary } from './model/journal'
 import {
   deleteProtocol,
   listProtocols,
   listSessions,
   loadSettings,
   saveProtocol,
-  saveSession,
   saveSettings,
   type Settings as SettingsShape,
 } from './model/storage'
 
 type View = 'run' | 'protocols' | 'analysis' | 'settings'
 
-const AUTOSAVE_MS = 15000
+/** Sessions read back to build the all-time best curve. Enough to be useful, bounded so a long-lived machine does not read every journal at boot. */
+const BEST_CURVE_SESSIONS = 20
+
+const MIGRATION_KEY = 'testday.migrated.v1'
 
 const DEFAULT_SETTINGS: SettingsShape = {
   athlete: DEFAULT_ATHLETE,
   wheelCircumferenceM: 2.096,
+}
+
+interface ResumeRequest {
+  session: SessionRecord
+  protocolId: string
 }
 
 export default function App() {
@@ -34,15 +44,21 @@ export default function App() {
   managerRef.current ??= new SensorManager()
   const manager = managerRef.current
 
+  const recorderRef = useRef<ReturnType<typeof createRecorder>>(null)
+  recorderRef.current ??= createRecorder()
+  const recorder = recorderRef.current
+
   const [settings, setSettings] = useState<SettingsShape>(() => loadSettings(DEFAULT_SETTINGS))
   const [saved, setSaved] = useState<Protocol[]>([])
   const [view, setView] = useState<View>('run')
   const [sensorsOpen, setSensorsOpen] = useState(false)
   const [activeProtocol, setActiveProtocol] = useState<Protocol | null>(null)
   const [runner, setRunner] = useState<TestRunner | null>(null)
-  const [sessionId, setSessionId] = useState<string>(() => newId('session'))
   const [bestCurve, setBestCurve] = useState<{ durationS: number; watts: number }[]>([])
   const [toast, setToast] = useState<string | null>(null)
+  const [status, setStatus] = useState<RecorderStatus>(IDLE_STATUS)
+  const [interrupted, setInterrupted] = useState<SessionSummary[]>([])
+  const [resumeRequest, setResumeRequest] = useState<ResumeRequest | null>(null)
 
   const protocols = useMemo(
     () => [...saved, ...builtInProtocols(settings.athlete.ftpWatts)],
@@ -54,22 +70,61 @@ export default function App() {
     manager.setWheelCircumference(settings.wheelCircumferenceM)
   }, [settings, manager])
 
+  useEffect(() => recorder.onStatus(setStatus), [recorder])
+
   useEffect(() => {
     void listProtocols().then(setSaved)
-    // The all-time best curve gives the live MMP panel something to beat.
-    void listSessions().then((sessions) => {
-      const best = new Map<number, number>()
-      for (const session of sessions) {
-        for (const point of mmpCurve(session.samples.map((s) => s.power ?? 0))) {
-          const current = best.get(point.durationS)
-          if (current === undefined || point.watts > current) best.set(point.durationS, point.watts)
-        }
-      }
-      setBestCurve(
-        [...best.entries()].map(([durationS, watts]) => ({ durationS, watts })).sort((a, b) => a.durationS - b.durationS),
-      )
-    })
   }, [])
+
+  // The all-time best curve gives the live MMP panel something to beat.
+  const refreshBestCurve = useCallback(async () => {
+    const summaries = await recorder.list()
+    const best = new Map<number, number>()
+    for (const summary of summaries.slice(0, BEST_CURVE_SESSIONS)) {
+      const session = await recorder.read(summary.id)
+      if (!session) continue
+      for (const point of mmpCurve(session.samples.map((s) => s.power ?? 0))) {
+        const current = best.get(point.durationS)
+        if (current === undefined || point.watts > current) best.set(point.durationS, point.watts)
+      }
+    }
+    setBestCurve(
+      [...best.entries()]
+        .map(([durationS, watts]) => ({ durationS, watts }))
+        .sort((a, b) => a.durationS - b.durationS),
+    )
+  }, [recorder])
+
+  /**
+   * One-time rescue of anything recorded in the browser before this machine had
+   * the desktop app, so no session is stranded in IndexedDB.
+   */
+  useEffect(() => {
+    if (!isDesktop()) return
+    if (localStorage.getItem(MIGRATION_KEY)) return
+    void (async () => {
+      try {
+        const legacy = await listSessions()
+        if (legacy.length > 0) {
+          const imported = await window.testday!.importSessions(legacy)
+          if (imported > 0) setToast(`Imported ${imported} session(s) recorded in the browser.`)
+        }
+      } finally {
+        localStorage.setItem(MIGRATION_KEY, '1')
+      }
+    })()
+  }, [])
+
+  // Anything the recorder never closed was interrupted, and is offered back.
+  const refreshInterrupted = useCallback(async () => {
+    const open = await recorder.unclosed()
+    setInterrupted(open.filter((summary) => summary.sampleCount > 0))
+  }, [recorder])
+
+  useEffect(() => {
+    void refreshInterrupted()
+    void refreshBestCurve()
+  }, [refreshInterrupted, refreshBestCurve])
 
   // Restore the last protocol so a reload during a test day lands where it left off.
   useEffect(() => {
@@ -81,34 +136,58 @@ export default function App() {
   /** A runner is bound to one protocol and one athlete; changing either rebuilds it. */
   useEffect(() => {
     if (!activeProtocol) return
+    const id = newId('session')
     const next = new TestRunner({
       protocol: activeProtocol,
       athlete: settings.athlete,
       readMetrics: () => manager.read(),
       machine: () => manager.machine?.control ?? null,
+      onStart: (startedAt) => {
+        void recorder
+          .begin(headerFor(id, activeProtocol, settings.athlete, startedAt))
+          .catch((error: unknown) =>
+            setToast(`Recording did not start: ${error instanceof Error ? error.message : String(error)}`),
+          )
+      },
+      onSample: (sample) => recorder.sample(sample),
+      onLactate: (entry) => recorder.lactate(entry),
     })
     setRunner((previous) => {
       previous?.dispose()
       return next
     })
-    setSessionId(newId('session'))
     return () => next.dispose()
-  }, [activeProtocol, settings.athlete, manager])
+  }, [activeProtocol, settings.athlete, manager, recorder])
 
-  const persist = useCallback(
-    async (current: TestRunner, id: string) => {
-      if (current.recordedSamples.length === 0) return
-      await saveSession(current.toRecord(id))
-    },
-    [],
-  )
-
-  // Autosave, so a browser crash mid-test costs at most one interval.
+  /**
+   * Seeds a rebuilt runner with a session recovered from disk. Runs after the
+   * effect above, so the runner it seeds is the one built for this protocol.
+   */
   useEffect(() => {
-    if (!runner) return
-    const timer = setInterval(() => void persist(runner, sessionId), AUTOSAVE_MS)
-    return () => clearInterval(timer)
-  }, [runner, sessionId, persist])
+    if (!resumeRequest || !runner || !activeProtocol) return
+    if (activeProtocol.id !== resumeRequest.protocolId) return
+    runner.resumeFrom(resumeRequest.session)
+    setResumeRequest(null)
+    setView('run')
+    setToast('Session restored. It is paused; start when the athlete is ready.')
+  }, [resumeRequest, runner, activeProtocol])
+
+  const resumeSession = async (summary: SessionSummary) => {
+    const state = await recorder.resume(summary.id)
+    if (!state) {
+      setToast('That session could not be reopened.')
+      return
+    }
+    const target = protocols.find((p) => p.id === state.session.protocolId) ?? null
+    if (!target) {
+      setToast(`The protocol for that session ("${summary.protocolName}") no longer exists.`)
+      return
+    }
+    setInterrupted((all) => all.filter((s) => s.id !== summary.id))
+    setActiveProtocol(target)
+    setSettings((s) => ({ ...s, lastProtocolId: target.id }))
+    setResumeRequest({ session: state.session, protocolId: target.id })
+  }
 
   const finish = async () => {
     if (!runner) return
@@ -117,14 +196,19 @@ export default function App() {
       setToast('Nothing recorded — session not saved.')
       return
     }
-    await persist(runner, sessionId)
-    setToast('Session saved.')
+    const result = await recorder.finish(Date.now())
+    setToast(
+      result.error
+        ? `${result.copies} copy saved. ${result.detail} ${result.error}`
+        : `${result.copies} ${result.copies === 1 ? 'copy' : 'copies'} confirmed. ${result.detail}`,
+    )
+    await refreshBestCurve()
     setView('analysis')
   }
 
   useEffect(() => {
     if (!toast) return
-    const timer = setTimeout(() => setToast(null), 4000)
+    const timer = setTimeout(() => setToast(null), 8000)
     return () => clearTimeout(timer)
   }, [toast])
 
@@ -152,6 +236,31 @@ export default function App() {
         <span className="muted small">{activeProtocol?.name}</span>
       </nav>
 
+      {interrupted.length > 0 && !status.recording && (
+        <div className="resume-banner">
+          <div>
+            <strong>
+              {interrupted.length === 1
+                ? 'A session was interrupted.'
+                : `${interrupted.length} sessions were interrupted.`}
+            </strong>
+            <span className="muted small">
+              Everything recorded before the interruption is on disk and can be continued.
+            </span>
+          </div>
+          <div className="resume-actions">
+            {interrupted.slice(0, 3).map((summary) => (
+              <button key={summary.id} onClick={() => void resumeSession(summary)}>
+                Resume {summary.protocolName} ({summary.sampleCount} s)
+              </button>
+            ))}
+            <button className="ghost" onClick={() => setInterrupted([])}>
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
+
       {view === 'run' &&
         (runner && activeProtocol ? (
           <Dashboard
@@ -160,6 +269,8 @@ export default function App() {
             athlete={settings.athlete}
             manager={manager}
             bestCurve={bestCurve}
+            status={status}
+            durability={recorder.durability}
             onOpenSensors={() => setSensorsOpen(true)}
             onFinish={finish}
           />
@@ -189,7 +300,7 @@ export default function App() {
         />
       )}
 
-      {view === 'analysis' && <Analysis protocols={protocols} />}
+      {view === 'analysis' && <Analysis protocols={protocols} recorder={recorder} />}
 
       {view === 'settings' && (
         <Settings

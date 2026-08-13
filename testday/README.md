@@ -1,11 +1,13 @@
 # testday
 
-A browser-based performance test-day suite. Build a step or ramp protocol, drive a smart trainer or
-treadmill over Bluetooth, watch the athlete's numbers live, and get lactate thresholds, critical power
-and a mean-maximal curve out the other end.
+A performance test-day suite. Build a step or ramp protocol, drive a smart trainer or treadmill over
+Bluetooth, watch the athlete's numbers live, and get lactate thresholds, critical power and a
+mean-maximal curve out the other end.
 
-Everything runs client-side. No account, no server, no upload — recordings live in your browser's
-IndexedDB until you export them.
+It runs as a **desktop app**, which is what lets a recording be written to a file as it happens rather
+than held in a browser tab that can be closed. Nothing leaves the machine: no account, no server, no
+upload, and no network requests at all. The same code still runs in a browser for demos and rehearsals,
+with the weaker storage that implies.
 
 ## What it does
 
@@ -21,8 +23,9 @@ lactate value. Global intensity trim (±1%), step skip, pause, and a lap table y
 jump around in.
 
 **Capture.** One sample per second of power, heart rate, cadence, speed and the commanded target,
-tagged with the step and phase it belongs to. Autosaved every 15 seconds, so a crash mid-test costs a
-few seconds rather than the session.
+tagged with the step and phase it belongs to. In the desktop app every sample is appended to a file
+and flushed to disk as it happens, so a crash costs nothing and an interrupted session is offered
+back for resume on the next launch. See [Recordings](#recordings).
 
 **Analysis.** A third-order fit through the lactate points with six threshold methods reported side by
 side (baseline + 1.0 mmol/L, log-log breakpoint, Dmax, modified Dmax, OBLA 2.0 and OBLA 4.0), heart
@@ -69,29 +72,88 @@ with a realistic first-order lag, produces pedalling noise, and drives a heart r
 drifts upward above threshold. Works in any browser, including ones without Web Bluetooth. Use it to
 rehearse a protocol before the athlete is on the bike.
 
+## Recordings
+
+The desktop app records to an **append-only journal**: one JSON object per line, `fsync`ed before the
+write returns. Nothing is ever rewritten, so the worst a crash can do is cut the final line.
+
+```
+~/Documents/testday/sessions/2026-08-12_07-31_session_xyz/
+  journal.ndjson   one line per sample, appended live
+  meta.json        cached summary for the session list, rewritten on close
+```
+
+- **A journal with no `closed` record is an interrupted session.** That is the only signal needed, so
+  there is no lock file to go stale. The app offers it back for resume on the next launch and picks
+  the clock up at the last sample on disk.
+- **A truncated final line is discarded on read** and everything before it survives. This is the
+  normal state of a journal whose process was killed mid-write.
+- **The second copy is made only after the session closes.** A file that is held open and continuously
+  appended is exactly what a sync client handles badly, so OneDrive never sees a live journal. The
+  copy is verified by size and SHA-256, re-read from the destination, before the app claims two copies
+  exist.
+- **Nothing is deleted.** Removing a session from the list moves it to `~/Documents/testday/discarded/`.
+- **A failed write turns the dashboard pill red immediately.** A silent write failure is worse than a
+  crash, because the operator carries on testing into nothing.
+
+### What this does and does not survive
+
+| Failure | Outcome |
+| --- | --- |
+| App crash, `kill -9`, forced quit | Everything up to the last completed sample. Resume offered. |
+| Renderer crash or reload | Same. The journal lives in the main process. |
+| OS panic or reboot | Same, because each append is fsynced. |
+| **Sudden power loss** | **The last few seconds may be lost.** |
+| Disk failure | The OneDrive copy of every *closed* session. An open one is gone. |
+
+The power-loss caveat is real and worth stating plainly: on macOS `fsync` does not flush the drive's
+own write cache, and Node does not expose `F_FULLFSYNC`. Run test days on mains power, and close a
+session before unplugging anything.
+
+The browser build has none of this. A browser cannot append to a file, so it falls back to rewriting
+the whole session into IndexedDB every 15 seconds. It is there for demos and for rehearsing a protocol
+with the simulator. Anything with an athlete on it belongs on the desktop app.
+
 ## Running it
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run electron:dev    # the desktop app, with hot reload
 ```
 
 ```bash
-npm run build      # typecheck + production bundle into dist/
-npm run preview    # serve the built bundle
-npm test           # unit tests
+npm run electron:build  # typecheck, bundle renderer and main process
+npm run electron:start  # run the built app
+npm run dist            # package a local .app into release/
+npm test                # unit tests
 ```
 
-The build is a static bundle — drop `dist/` on any HTTPS host. Set `BASE_PATH` when serving from a
-subdirectory:
+The browser version still builds from the same source:
+
+```bash
+npm run dev             # http://localhost:5173
+npm run build           # static bundle into dist/
+npm run preview
+```
+
+`dist/` can be dropped on any HTTPS host. Set `BASE_PATH` when serving from a subdirectory:
 
 ```bash
 BASE_PATH=/testday/ npm run build
 ```
 
+The desktop app makes **no network requests at all** — non-local requests are blocked outright and
+there is no updater. Nothing about it can hang on a conference-centre network on the morning of a test.
+
 ## Layout
 
 ```
+electron/
+  main.ts        window, IPC, sleep blocker, close guard, Bluetooth chooser relay
+  preload.ts     the window.testday bridge, the renderer's only reach into the recorder
+  ipc.ts         channel names and payload types, shared by both sides
+  journal.ts     the file half of the journal: open, append, fsync
+  sessions.ts    session directories, listing, resume, mirror and verification
 src/
   ble/
     uuids.ts       Assigned numbers and FTMS op codes
@@ -103,6 +165,8 @@ src/
     protocol.ts    Protocol/step types, target resolution, builders
     presets.ts     Built-in test protocols
     session.ts     The runner: clock, step advance, ERG push, recording
+    journal.ts     The on-disk record format: encode, decode, reconstruct
+    recorder.ts    Where a recording goes; file backend on desktop, IndexedDB in a browser
     metrics.ts     Rolling averages, MMP tracker, normalised power
     analysis.ts    Polynomial fitting, threshold methods, critical power
     storage.ts     IndexedDB for sessions and protocols
@@ -112,10 +176,17 @@ src/
 
 Tests cover the parts where being wrong is silent: characteristic parsing (including the inverted
 "more data" flag in FTMS and 16-bit counter wraparound), the runner's timing and ERG behaviour, the
-MMP tracker against a brute-force search, and every threshold method against a synthetic step test.
+MMP tracker against a brute-force search, every threshold method against a synthetic step test, and
+the journal.
+
+The journal tests are the ones that matter most, because a recording bug is not visible until the
+recording is needed. They cover encoding round-trips, a truncated final line, a corrupt line in the
+middle, resume positioning, and mirror verification. One test spawns a real child process, kills it
+with `SIGKILL` mid-recording, and checks that every sample the recorder acknowledged is on disk with
+no gaps: truncating a file by hand only tests the reader, not the durability claim.
 
 ```
-npm test    # 50 tests
+npm test    # 90 tests
 ```
 
 ## Notes on the numbers

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { SENSOR_PROFILES, isWebBluetoothAvailable, type SensorManager, type SensorProfile } from '../ble/manager'
 import { Simulator } from '../ble/simulator'
+import { BluetoothChooser, useBluetoothChooser } from './BluetoothChooser'
 import { useLiveMetrics, useSensorDevices } from './hooks'
 import type { MetricKey } from '../ble/types'
 
@@ -12,6 +13,11 @@ const METRIC_LABELS: Record<MetricKey, string> = {
   distanceM: 'distance',
   inclinePct: 'incline',
   resistance: 'resistance',
+  coreTempC: 'core temp',
+  skinTempC: 'skin temp',
+  heatStrainIndex: 'heat strain',
+  coreQuality: 'quality',
+  coreHrmState: 'HRM link',
 }
 
 const SOURCE_METRICS: { key: MetricKey; label: string }[] = [
@@ -32,6 +38,7 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
   const metrics = useLiveMetrics(manager, 4)
   const [error, setError] = useState<string | null>(null)
   const [connecting, setConnecting] = useState<string | null>(null)
+  const chooser = useBluetoothChooser(connecting !== null)
 
   const add = async (profile: SensorProfile) => {
     setError(null)
@@ -47,6 +54,13 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
     }
   }
 
+  // Leaving the panel with a scan in flight would otherwise leave
+  // `requestDevice` pending for the life of the app.
+  const close = () => {
+    if (connecting !== null) chooser.cancel()
+    onClose()
+  }
+
   const addSimulator = () => {
     if (devices.some((d) => d.id === 'sim:trainer')) return
     const simulator = new Simulator(manager, { ftpWatts })
@@ -57,7 +71,7 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
   const supported = isWebBluetoothAvailable()
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={close}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>Sensors</h2>
 
@@ -68,6 +82,16 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
           </p>
         )}
         {error && <p className="banner error">{error}</p>}
+
+        <BluetoothChooser
+          devices={chooser.devices}
+          scanning={chooser.scanning}
+          onPick={chooser.pick}
+          onCancel={() => {
+            chooser.cancel()
+            setConnecting(null)
+          }}
+        />
 
         <div className="sensor-buttons">
           {SENSOR_PROFILES.map((profile) => (
@@ -161,7 +185,7 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
         </div>
 
         <div className="modal-actions">
-          <button className="primary" onClick={onClose}>
+          <button className="primary" onClick={close}>
             Done
           </button>
         </div>

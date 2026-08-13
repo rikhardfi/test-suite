@@ -1,5 +1,7 @@
 import {
   isControlled,
+  recoveryWatts,
+  stepInclinePct,
   stepLabel,
   stepTotalS,
   targetKphAt,
@@ -27,6 +29,14 @@ export interface Sample {
   speedMs?: number
   targetPower?: number
   targetKph?: number
+  /** CORE sensor, when one is connected. Recorded with its own quality flag. */
+  coreTempC?: number
+  skinTempC?: number
+  heatStrainIndex?: number
+  /** 0 invalid, 1 poor, 2 fair, 3 good, 4 excellent. */
+  coreQuality?: number
+  /** 0 HRM unsupported, 1 supported but not receiving, 2 receiving. */
+  coreHrmState?: number
 }
 
 export interface LactateEntry {
@@ -38,6 +48,11 @@ export interface LactateEntry {
   heartRate?: number
   note?: string
   at: number
+  /**
+   * A value the operator cleared. Recorded rather than deleted, because the
+   * journal is append-only: the withdrawal is itself part of what happened.
+   */
+  removed?: boolean
 }
 
 export interface SessionRecord {
@@ -91,6 +106,15 @@ export interface RunnerOptions {
   readMetrics: () => MetricUpdate
   machine?: () => MachineControl | null
   now?: () => number
+  /** Fired when the test first starts, before any sample exists. */
+  onStart?: (startedAt: number) => void
+  /**
+   * Fired for every recorded sample, so the recorder can put it on disk
+   * immediately. Never fired for samples restored by `resumeFrom`, which are
+   * already there.
+   */
+  onSample?: (sample: Sample) => void
+  onLactate?: (entry: LactateEntry) => void
 }
 
 const TICK_MS = 200
@@ -112,6 +136,9 @@ export class TestRunner {
   private readonly readMetrics: () => MetricUpdate
   private readonly machine: () => MachineControl | null
   private readonly now: () => number
+  private readonly onStart?: (startedAt: number) => void
+  private readonly onSample?: (sample: Sample) => void
+  private readonly onLactate?: (entry: LactateEntry) => void
 
   private timer: ReturnType<typeof setInterval> | null = null
   private lastTickAt = 0
@@ -140,6 +167,9 @@ export class TestRunner {
     this.readMetrics = options.readMetrics
     this.machine = options.machine ?? (() => null)
     this.now = options.now ?? (() => Date.now())
+    this.onStart = options.onStart
+    this.onSample = options.onSample
+    this.onLactate = options.onLactate
   }
 
   subscribe(fn: () => void): () => void {
@@ -158,6 +188,9 @@ export class TestRunner {
     if (this.state === 'running') return
     if (this.state === 'idle') {
       this.startedAt = Date.now()
+      // Announced before the first sample can be taken, so the recorder has a
+      // journal open by the time one arrives.
+      this.onStart?.(this.startedAt)
       void this.machine()?.start().catch(() => undefined)
     }
     this.state = 'running'
@@ -189,6 +222,47 @@ export class TestRunner {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.listeners.clear()
+  }
+
+  /**
+   * Restores a session recovered from disk: its samples, its lactate values,
+   * and the clock position those imply. Comes back paused, so the operator
+   * decides when the athlete is ready rather than the app deciding for them.
+   *
+   * Restored samples are deliberately not pushed back through `onSample`: they
+   * are already in the journal, and re-emitting them would duplicate every one.
+   */
+  resumeFrom(session: SessionRecord): void {
+    this.samples = [...session.samples]
+    this.lactate = [...session.lactate]
+    this.startedAt = session.startedAt
+
+    const last = this.samples[this.samples.length - 1]
+    if (!last) return
+
+    this.elapsedS = last.t
+    this.nextSampleAt = last.t + SAMPLE_INTERVAL_S
+
+    // Walk the protocol to find which step that elapsed time lands in.
+    let remaining = this.elapsedS
+    let index = 0
+    while (index < this.protocol.steps.length) {
+      const total = stepTotalS(this.protocol.steps[index])
+      if (remaining < total) break
+      remaining -= total
+      index += 1
+    }
+
+    if (index >= this.protocol.steps.length) {
+      this.stepIndex = this.protocol.steps.length - 1
+      this.stepElapsedS = stepTotalS(this.protocol.steps[this.stepIndex])
+      this.state = 'finished'
+    } else {
+      this.stepIndex = index
+      this.stepElapsedS = remaining
+      this.state = 'paused'
+    }
+    this.emit()
   }
 
   // --- navigation ---------------------------------------------------------
@@ -245,11 +319,13 @@ export class TestRunner {
     const record: LactateEntry = { ...entry, at: entry.at ?? Date.now() }
     if (existing >= 0) this.lactate[existing] = record
     else this.lactate.push(record)
+    this.onLactate?.(record)
     this.emit()
   }
 
   removeLactate(stepIndex: number): void {
     this.lactate = this.lactate.filter((l) => l.stepIndex !== stepIndex)
+    this.onLactate?.({ stepIndex, mmol: 0, at: Date.now(), removed: true })
     this.emit()
   }
 
@@ -297,7 +373,7 @@ export class TestRunner {
   private record(t: number): void {
     const metrics = this.readMetrics()
     const step = this.currentStep
-    this.samples.push({
+    const sample: Sample = {
       t: Math.round(t),
       stepIndex: this.stepIndex,
       phase: this.phase,
@@ -307,7 +383,17 @@ export class TestRunner {
       speedMs: metrics.speedMs,
       targetPower: step ? this.targetPower ?? undefined : undefined,
       targetKph: step ? this.targetKph ?? undefined : undefined,
-    })
+      // Recorded exactly as reported, quality included. Judging a reading is
+      // something to do afterwards with the quality flag in hand, not
+      // something to do by silently dropping it now.
+      coreTempC: metrics.coreTempC,
+      skinTempC: metrics.skinTempC,
+      heatStrainIndex: metrics.heatStrainIndex,
+      coreQuality: metrics.coreQuality,
+      coreHrmState: metrics.coreHrmState,
+    }
+    this.samples.push(sample)
+    this.onSample?.(sample)
   }
 
   /** Sends the current target to the machine, skipping redundant writes. */
@@ -351,7 +437,7 @@ export class TestRunner {
         void send(async () => {
           await control.setTargetSpeedKph(kph)
           const step = this.currentStep
-          const incline = step?.target.mode === 'speed' ? step.target.inclinePct : undefined
+          const incline = step ? stepInclinePct(step) : null
           if (incline != null && control.canSetIncline) await control.setTargetInclinePct(incline)
         })
       }
@@ -372,13 +458,14 @@ export class TestRunner {
 
   /**
    * Target during a sampling break drops to an easy spin so the athlete can be
-   * pricked without fighting the trainer.
+   * pricked without fighting the trainer. How easy is the protocol's business,
+   * not the runner's.
    */
   get targetPower(): number | null {
     const step = this.currentStep
     if (!step) return null
     if (this.phase === 'break') {
-      return isControlled(step) ? Math.round(this.athlete.ftpWatts * 0.3) : null
+      return isControlled(step) ? recoveryWatts(step, this.protocol, this.athlete.ftpWatts) : null
     }
     const base = targetWattsAt(step, this.stepElapsedS, this.athlete.ftpWatts)
     return base === null ? null : Math.round(base * this.intensity)
@@ -386,9 +473,10 @@ export class TestRunner {
 
   get targetKph(): number | null {
     const step = this.currentStep
-    if (!step || step.target.mode !== 'speed') return null
+    if (!step) return null
     if (this.phase === 'break') return 0
-    const base = targetKphAt(step, this.stepElapsedS)
+    // Covers both a speed target and a VO₂ target solved to a speed.
+    const base = targetKphAt(step, this.stepElapsedS, this.athlete.economyPct ?? 100)
     return base === null ? null : Number((base * this.intensity).toFixed(2))
   }
 
@@ -474,7 +562,7 @@ export function lapsFromSamples(
     return {
       stepIndex: index,
       name: step.name ?? `Step ${index + 1}`,
-      target: stepLabel(step, athlete.ftpWatts),
+      target: stepLabel(step, athlete.ftpWatts, athlete.economyPct ?? 100),
       targetWatts: targetWatts === null ? null : Math.round(targetWatts),
       durationS: step.durationS,
       avgPower: power.length ? Math.round(mean(power)) : null,

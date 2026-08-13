@@ -7,7 +7,10 @@ import { useHotkeys, useLiveMetrics, useRunnerSnapshot } from './hooks'
 import { formatClock, formatCountdown, mmpCurve } from '../model/metrics'
 import { planPowerSeries, stepLabel, type Athlete, type Protocol } from '../model/protocol'
 import { lapsFromSamples, type TestRunner } from '../model/session'
+import type { RecorderStatus } from '../model/recorder'
+import { CORE_QUALITY } from '../ble/parse'
 import type { SensorManager } from '../ble/manager'
+import type { MetricUpdate } from '../ble/types'
 
 interface Props {
   runner: TestRunner
@@ -15,6 +18,9 @@ interface Props {
   athlete: Athlete
   manager: SensorManager
   bestCurve?: { durationS: number; watts: number }[]
+  status: RecorderStatus
+  /** How this build stores a recording, said plainly. */
+  durability: string
   onOpenSensors: () => void
   onFinish: () => void
 }
@@ -25,6 +31,8 @@ export function Dashboard({
   athlete,
   manager,
   bestCurve,
+  status,
+  durability,
   onOpenSensors,
   onFinish,
 }: Props) {
@@ -130,6 +138,15 @@ export function Dashboard({
           unit={isRun ? 'km/h' : 'W'}
           tone="target"
         />
+        {metrics.coreTempC != null && (
+          <Tile
+            label="Core temp"
+            value={metrics.coreTempC.toFixed(2)}
+            unit="°C"
+            tone="core"
+            note={coreNote(metrics)}
+          />
+        )}
       </section>
 
       <section className="panel graph-panel">
@@ -139,7 +156,7 @@ export function Dashboard({
           </span>
           <strong>{snapshot.step?.name ?? 'Step'}</strong>
           <span className="muted">
-            {snapshot.step ? stepLabel(snapshot.step, athlete.ftpWatts) : ''} ·{' '}
+            {snapshot.step ? stepLabel(snapshot.step, athlete.ftpWatts, athlete.economyPct ?? 100) : ''} ·{' '}
             {formatCountdown(snapshot.phaseRemainingS)} left · {Math.round(snapshot.stepProgress * 100)}%
           </span>
           <span className="spacer" />
@@ -196,6 +213,7 @@ export function Dashboard({
         <span className="spacer" />
 
         <div className="group">
+          <RecordingPill status={status} durability={durability} />
           <button onClick={onOpenSensors}>
             Sensors <span className="count">{manager.devices.length}</span>
           </button>
@@ -226,12 +244,15 @@ function Tile({
   unit,
   tone,
   wide,
+  note,
 }: {
   label: string
   value: string
   unit?: string
-  tone?: 'power' | 'heart' | 'target' | 'lactate'
+  tone?: 'power' | 'heart' | 'target' | 'lactate' | 'core'
   wide?: boolean
+  /** Secondary line, e.g. the quality the sensor put on its own reading. */
+  note?: string
 }) {
   return (
     <div className={`tile ${tone ?? ''} ${wide ? 'wide' : ''}`}>
@@ -240,7 +261,65 @@ function Tile({
         {value}
         {unit && <em>{unit}</em>}
       </span>
+      {note && <span className="tile-note">{note}</span>}
     </div>
+  )
+}
+
+/**
+ * The CORE reading's own account of itself. Shown rather than used to hide the
+ * number: a reading the sensor is unsure about is still a reading, and the
+ * judgement about whether to trust it belongs to the person running the test.
+ */
+function coreNote(metrics: MetricUpdate): string | undefined {
+  const parts: string[] = []
+  if (metrics.coreQuality != null) {
+    parts.push(CORE_QUALITY[metrics.coreQuality] ?? `quality ${metrics.coreQuality}`)
+  }
+  if (metrics.skinTempC != null) parts.push(`skin ${metrics.skinTempC.toFixed(1)}°`)
+  if (metrics.heatStrainIndex != null) parts.push(`HSI ${metrics.heatStrainIndex.toFixed(1)}`)
+  return parts.length ? parts.join(' · ') : undefined
+}
+
+/**
+ * Recording state, in view for the whole test. A failed write has to be seen at
+ * once: an operator who keeps testing into a dead journal loses the session,
+ * which is a worse outcome than the app simply crashing.
+ */
+function RecordingPill({ status, durability }: { status: RecorderStatus; durability: string }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  if (status.error) {
+    return (
+      <span className="rec bad" title={status.error}>
+        ● Not saving — {status.error}
+      </span>
+    )
+  }
+
+  if (!status.recording) {
+    return (
+      <span className="rec idle" title={durability}>
+        ○ Not recording
+      </span>
+    )
+  }
+
+  const ago =
+    status.lastDurableAt === null ? null : Math.max(0, Math.round((now - status.lastDurableAt) / 1000))
+  // Samples land every second, so nothing for several seconds means the writes
+  // have stopped even though no error was raised.
+  const stale = ago !== null && ago > 4
+
+  return (
+    <span className={stale ? 'rec warn' : 'rec good'} title={durability}>
+      ● {formatClock(status.sampleCount)} on disk
+      {ago === null ? '' : `, ${ago} s ago`}
+    </span>
   )
 }
 

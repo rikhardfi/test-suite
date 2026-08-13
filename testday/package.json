@@ -4,13 +4,32 @@
   "private": true,
   "type": "module",
   "description": "Web Bluetooth performance test-day suite: protocols, live ERG control, capture and lactate/threshold analysis.",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p electron/tsconfig.json",
+    "electron:dev": "node electron/dev.mjs",
+    "electron:build": "BASE_PATH=./ npm run build && node electron/build.mjs",
+    "electron:start": "npm run electron:build && electron .",
+    "dist": "npm run electron:build && electron-builder --dir"
+  },
+  "build": {
+    "appId": "fi.tuni.testday",
+    "productName": "testday",
+    "directories": { "output": "release" },
+    "files": ["dist/**", "dist-electron/**", "package.json"],
+    "mac": {
+      "category": "public.app-category.healthcare-fitness",
+      "target": "dir",
+      "extendInfo": {
+        "NSBluetoothAlwaysUsageDescription": "testday connects to heart rate straps, power meters, trainers and treadmills over Bluetooth to record a test session.",
+        "NSBluetoothPeripheralUsageDescription": "testday connects to heart rate straps, power meters, trainers and treadmills over Bluetooth to record a test session."
+      }
+    }
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -22,6 +41,9 @@
     "@types/react-dom": "^19.1.0",
     "@types/web-bluetooth": "^0.0.21",
     "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^38.8.6",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.25.12",
     "typescript": "^5.7.3",
     "vite": "^6.0.11",
     "vitest": "^3.0.5"

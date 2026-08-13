@@ -24,11 +24,13 @@ const PAD = { top: 14, right: 54, bottom: 26, left: 52 }
 export function WorkoutGraph({ protocol, athlete, samples, elapsedS }: Props) {
   const plan = useMemo(
     () => ({
-      power: planPowerSeries(protocol, athlete.ftpWatts, Math.round(athlete.ftpWatts * 0.3)),
-      speed: protocol.sport === 'run' ? planSpeedSeries(protocol) : [],
+      // The plan trace now draws the protocol's own recovery target, so what is
+      // shown during a break is what the trainer will actually be sent.
+      power: planPowerSeries(protocol, athlete.ftpWatts),
+      speed: protocol.sport === 'run' ? planSpeedSeries(protocol, athlete.economyPct ?? 100) : [],
       boundaries: stepBoundaries(protocol),
     }),
-    [protocol, athlete.ftpWatts],
+    [protocol, athlete.ftpWatts, athlete.economyPct],
   )
 
   const ref = useCanvas(

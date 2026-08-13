@@ -1,17 +1,26 @@
 import { useState } from 'react'
 import { formatClock } from '../model/metrics'
 import {
+  DEFAULT_RECOVERY,
+  buildIntervals,
   buildRamp,
   buildRunStepTest,
   buildStepTest,
   makeProtocol,
   newId,
+  numberRepeats,
   protocolDurationS,
+  recoveryLabel,
+  recoveryWatts,
+  stepInclinePct,
   stepLabel,
+  targetKphAt,
   type Athlete,
   type Protocol,
+  type RecoveryTarget,
   type Step,
 } from '../model/protocol'
+import { computeVo2 } from '../model/vo2'
 
 interface Props {
   protocols: Protocol[]
@@ -139,7 +148,7 @@ export function Builder({ protocols, selectedId, athlete, onSelect, onSave, onDe
   )
 }
 
-type Template = 'bikeStep' | 'ramp' | 'runStep'
+type Template = 'bikeStep' | 'ramp' | 'runStep' | 'intervals'
 
 function GeneratorDialog({
   athlete,
@@ -163,6 +172,13 @@ function GeneratorDialog({
     startKph: 10,
     stepKph: 1,
     inclinePct: 1,
+    reps: 4,
+    onDurationS: 240,
+    onPctFtp: 105,
+    offDurationS: 120,
+    offPctFtp: 45,
+    sets: 1,
+    setRecoveryS: 300,
   })
 
   const set = (key: keyof typeof values) => (event: React.ChangeEvent<HTMLInputElement>) =>
@@ -183,6 +199,20 @@ function GeneratorDialog({
         warmupDurationS: values.warmupDurationS || undefined,
       })
       name = `Step test ${formatClock(values.stepDurationS)} / ${values.stepWatts} W`
+    } else if (template === 'intervals') {
+      steps = buildIntervals({
+        reps: values.reps,
+        onDurationS: values.onDurationS,
+        onTarget: { mode: 'ftp', pctFtp: values.onPctFtp },
+        offDurationS: values.offDurationS,
+        offTarget: { mode: 'ftp', pctFtp: values.offPctFtp },
+        sets: values.sets,
+        setRecoveryS: values.setRecoveryS || undefined,
+      })
+      name =
+        values.sets > 1
+          ? `${values.sets} × ${values.reps} × ${formatClock(values.onDurationS)}`
+          : `${values.reps} × ${formatClock(values.onDurationS)}`
     } else if (template === 'ramp') {
       steps = buildRamp({
         startWatts: values.startWatts,
@@ -213,6 +243,7 @@ function GeneratorDialog({
           {(
             [
               ['bikeStep', 'Bike steps'],
+              ['intervals', 'Intervals'],
               ['ramp', 'Ramp'],
               ['runStep', 'Treadmill steps'],
             ] as [Template, string][]
@@ -224,7 +255,22 @@ function GeneratorDialog({
         </div>
 
         <div className="field-grid">
-          {template === 'runStep' ? (
+          {template === 'intervals' && (
+            <>
+              <Field label="Reps per set" value={values.reps} onChange={set('reps')} />
+              <Field label="Work (s)" value={values.onDurationS} onChange={set('onDurationS')} />
+              <Field label="Work (% FTP)" value={values.onPctFtp} onChange={set('onPctFtp')} />
+              <Field label="Rest (s)" value={values.offDurationS} onChange={set('offDurationS')} />
+              <Field label="Rest (% FTP)" value={values.offPctFtp} onChange={set('offPctFtp')} />
+              <Field label="Sets" value={values.sets} onChange={set('sets')} />
+              <Field
+                label="Between sets (s, 0 = none)"
+                value={values.setRecoveryS}
+                onChange={set('setRecoveryS')}
+              />
+            </>
+          )}
+          {template === 'intervals' ? null : template === 'runStep' ? (
             <>
               <Field label="Start speed (km/h)" value={values.startKph} onChange={set('startKph')} step={0.5} />
               <Field label="Increment (km/h)" value={values.stepKph} onChange={set('stepKph')} step={0.5} />
@@ -279,6 +325,9 @@ function StepEditor({
   onClose: () => void
 }) {
   const [draft, setDraft] = useState<Protocol>({ ...protocol, steps: protocol.steps.map((s) => ({ ...s })) })
+  const [repeat, setRepeat] = useState({ from: 1, to: 1, times: 4 })
+  const economy = athlete.economyPct ?? 100
+  const isRun = draft.sport === 'run'
 
   const update = (index: number, patch: Partial<Step>) =>
     setDraft((d) => ({
@@ -290,9 +339,49 @@ function StepEditor({
     update(index, { target: { mode: 'watts', watts } })
 
   const setKph = (index: number, kph: number) => {
-    const existing = draft.steps[index].target
-    update(index, {
-      target: { mode: 'speed', kph, inclinePct: existing.mode === 'speed' ? existing.inclinePct : undefined },
+    update(index, { target: { mode: 'speed', kph, inclinePct: stepInclinePct(draft.steps[index]) ?? undefined } })
+  }
+
+  const setVo2 = (index: number, vo2: number) => {
+    update(index, { target: { mode: 'vo2', vo2, inclinePct: stepInclinePct(draft.steps[index]) ?? undefined } })
+  }
+
+  const setIncline = (index: number, inclinePct: number) => {
+    const target = draft.steps[index].target
+    if (target.mode === 'speed') update(index, { target: { ...target, inclinePct } })
+    else if (target.mode === 'vo2') update(index, { target: { ...target, inclinePct } })
+  }
+
+  const setRunMode = (index: number, mode: 'speed' | 'vo2') => {
+    const step = draft.steps[index]
+    if (mode === step.target.mode) return
+    // Carry the effort across rather than resetting it: the speed the athlete
+    // was going to run is converted to its oxygen cost and back.
+    const incline = stepInclinePct(step) ?? 0
+    if (mode === 'vo2') {
+      const kph = step.target.mode === 'speed' ? step.target.kph : 0
+      const vo2 = kph > 0 ? computeVo2(kph, incline, economy).vo2 : 45
+      update(index, { target: { mode: 'vo2', vo2: Number(vo2.toFixed(1)), inclinePct: incline } })
+    } else {
+      const kph = targetKphAt(step, 0, economy) ?? 10
+      update(index, { target: { mode: 'speed', kph: Number(kph.toFixed(2)), inclinePct: incline } })
+    }
+  }
+
+  const recovery = draft.recovery ?? DEFAULT_RECOVERY
+  const setRecovery = (next: RecoveryTarget) => setDraft((d) => ({ ...d, recovery: next }))
+
+  /** Appends `times` more copies of a block of steps, numbered as repetitions. */
+  const insertRepeats = (fromIndex: number, toIndex: number, times: number) => {
+    const from = Math.max(0, Math.min(fromIndex, toIndex))
+    const to = Math.min(draft.steps.length - 1, Math.max(fromIndex, toIndex))
+    if (times < 2 || from > to) return
+    setDraft((d) => {
+      const block = d.steps.slice(from, to + 1)
+      // The block itself is renumbered too, so the first repetition reads 1/N
+      // rather than being the only one without a number.
+      const expanded = numberRepeats(block, times)
+      return { ...d, steps: [...d.steps.slice(0, from), ...expanded, ...d.steps.slice(to + 1)] }
     })
   }
 
@@ -315,6 +404,36 @@ function StepEditor({
               <option value="run">Run</option>
             </select>
           </label>
+          <label>
+            Recovery during breaks
+            <div className="row nowrap">
+              <select
+                value={recovery.mode}
+                onChange={(e) =>
+                  setRecovery(
+                    e.target.value === 'watts'
+                      ? { mode: 'watts', watts: recoveryWatts({ id: '', durationS: 0, target: { mode: 'free' } }, draft, athlete.ftpWatts) }
+                      : { mode: 'ftp', pctFtp: 30 },
+                  )
+                }
+              >
+                <option value="ftp">% of FTP</option>
+                <option value="watts">watts</option>
+              </select>
+              <input
+                type="number"
+                value={recovery.mode === 'watts' ? recovery.watts : recovery.pctFtp}
+                onChange={(e) =>
+                  setRecovery(
+                    recovery.mode === 'watts'
+                      ? { mode: 'watts', watts: Number(e.target.value) }
+                      : { mode: 'ftp', pctFtp: Number(e.target.value) },
+                  )
+                }
+              />
+              <span className="muted small nowrap">= {recoveryLabel(recovery, athlete.ftpWatts)}</span>
+            </div>
+          </label>
           <label className="span-2">
             Description
             <input
@@ -331,8 +450,11 @@ function StepEditor({
                 <th>#</th>
                 <th>Name</th>
                 <th>Duration (s)</th>
-                <th>{draft.sport === 'run' ? 'Speed (km/h)' : 'Target (W)'}</th>
+                {isRun && <th>Mode</th>}
+                <th>{isRun ? 'Target' : 'Target (W)'}</th>
+                {isRun && <th>Grade (%)</th>}
                 <th>Break (s)</th>
+                <th>Recovery (W)</th>
                 <th>Lactate</th>
                 <th />
               </tr>
@@ -351,14 +473,40 @@ function StepEditor({
                       onChange={(e) => update(index, { durationS: Number(e.target.value) })}
                     />
                   </td>
+                  {isRun && (
+                    <td>
+                      <select
+                        value={step.target.mode === 'vo2' ? 'vo2' : 'speed'}
+                        onChange={(e) => setRunMode(index, e.target.value as 'speed' | 'vo2')}
+                      >
+                        <option value="speed">km/h</option>
+                        <option value="vo2">VO₂</option>
+                      </select>
+                    </td>
+                  )}
                   <td>
-                    {draft.sport === 'run' ? (
-                      <input
-                        type="number"
-                        step={0.1}
-                        value={step.target.mode === 'speed' ? step.target.kph : 0}
-                        onChange={(e) => setKph(index, Number(e.target.value))}
-                      />
+                    {isRun ? (
+                      step.target.mode === 'vo2' ? (
+                        <div className="row nowrap">
+                          <input
+                            type="number"
+                            step={0.5}
+                            value={step.target.vo2}
+                            onChange={(e) => setVo2(index, Number(e.target.value))}
+                          />
+                          {/* The solved speed is what the treadmill is sent. */}
+                          <span className="muted small nowrap">
+                            {(targetKphAt(step, 0, economy) ?? 0).toFixed(1)} km/h
+                          </span>
+                        </div>
+                      ) : (
+                        <input
+                          type="number"
+                          step={0.1}
+                          value={step.target.mode === 'speed' ? step.target.kph : 0}
+                          onChange={(e) => setKph(index, Number(e.target.value))}
+                        />
+                      )
                     ) : (
                       <input
                         type="number"
@@ -373,11 +521,36 @@ function StepEditor({
                       />
                     )}
                   </td>
+                  {isRun && (
+                    <td>
+                      <input
+                        type="number"
+                        step={0.5}
+                        value={stepInclinePct(step) ?? 0}
+                        onChange={(e) => setIncline(index, Number(e.target.value))}
+                      />
+                    </td>
+                  )}
                   <td>
                     <input
                       type="number"
                       value={step.recoveryS ?? 0}
                       onChange={(e) => update(index, { recoveryS: Number(e.target.value) || undefined })}
+                    />
+                  </td>
+                  <td>
+                    {/* Blank means "inherit the protocol's recovery". */}
+                    <input
+                      type="number"
+                      placeholder={String(recoveryWatts({ ...step, recoveryTarget: undefined }, draft, athlete.ftpWatts))}
+                      value={step.recoveryTarget?.mode === 'watts' ? step.recoveryTarget.watts : ''}
+                      onChange={(e) =>
+                        update(index, {
+                          recoveryTarget: e.target.value
+                            ? { mode: 'watts', watts: Number(e.target.value) }
+                            : undefined,
+                        })
+                      }
                     />
                   </td>
                   <td className="center">
@@ -416,6 +589,46 @@ function StepEditor({
               ))}
             </tbody>
           </table>
+        </div>
+
+        <div className="row repeat-bar">
+          <span className="muted small">Repeat steps</span>
+          <input
+            type="number"
+            className="inline"
+            min={1}
+            max={draft.steps.length}
+            value={repeat.from}
+            onChange={(e) => setRepeat((r) => ({ ...r, from: Number(e.target.value) }))}
+          />
+          <span className="muted small">to</span>
+          <input
+            type="number"
+            className="inline"
+            min={1}
+            max={draft.steps.length}
+            value={repeat.to}
+            onChange={(e) => setRepeat((r) => ({ ...r, to: Number(e.target.value) }))}
+          />
+          <span className="muted small">×</span>
+          <input
+            type="number"
+            className="inline"
+            min={2}
+            value={repeat.times}
+            onChange={(e) => setRepeat((r) => ({ ...r, times: Number(e.target.value) }))}
+          />
+          <button
+            disabled={repeat.times < 2 || repeat.from < 1 || repeat.to > draft.steps.length}
+            onClick={() => insertRepeats(repeat.from - 1, repeat.to - 1, repeat.times)}
+          >
+            Expand
+          </button>
+          <span className="muted small">
+            {/* Said plainly, because expansion rewrites the step list in place. */}
+            Writes the block out {repeat.times} times. Editing one copy afterwards does not change
+            the others.
+          </span>
         </div>
 
         <div className="row">

@@ -10,6 +10,23 @@ export const SVC = {
   deviceInformation: 0x180a,
 } as const
 
+/**
+ * CORE Body Temperature Service, a vendor service rather than a SIG-assigned
+ * one, so its UUIDs are full 128-bit strings.
+ *
+ * Specification: "Core Body Temperature Service", CoreBodyTemp/CoreBodyTemp on
+ * GitHub. Sensors advertise the service UUID; the advertised *name* is not
+ * reliable and must not be filtered on.
+ */
+export const CORE_SVC = '00002100-5b1e-4347-b07c-97b514dae121'
+
+export const CORE_CHR = {
+  /** Core body temperature measurement. Read, Notify. */
+  measurement: '00002101-5b1e-4347-b07c-97b514dae121',
+  /** CoreTemp control point, for pairing the sensor to a heart rate monitor. */
+  controlPoint: '00002102-5b1e-4347-b07c-97b514dae121',
+} as const
+
 export const CHR = {
   heartRateMeasurement: 0x2a37,
 

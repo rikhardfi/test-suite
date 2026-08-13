@@ -20,7 +20,18 @@ export class Simulator implements SensorDevice, MachineControl {
   readonly id = 'sim:trainer'
   readonly name = 'Simulated trainer + athlete'
   readonly kind = 'mock' as const
-  readonly provides = ['power', 'cadence', 'heartRate', 'speedMs', 'distanceM'] as const
+  readonly provides = [
+    'power',
+    'cadence',
+    'heartRate',
+    'speedMs',
+    'distanceM',
+    'coreTempC',
+    'skinTempC',
+    'heatStrainIndex',
+    'coreQuality',
+    'coreHrmState',
+  ] as const
   state = 'connected' as const
 
   readonly canSetPower = true
@@ -34,6 +45,8 @@ export class Simulator implements SensorDevice, MachineControl {
   private cadence = 90
   private hr: number
   private distanceM = 0
+  private coreTempC = 37.0
+  private skinTempC = 32.5
   private phase = 0
   private timer: ReturnType<typeof setInterval> | null = null
 
@@ -115,12 +128,27 @@ export class Simulator implements SensorDevice, MachineControl {
     const drift = intensity > 0.95 ? (intensity - 0.95) * 0.55 : 0
     this.hr += (steadyHr - this.hr) * (dt / 40) + drift * dt
 
+    // Core temperature climbs slowly with intensity and falls back towards
+    // baseline when the work stops. The time constant is minutes, not seconds,
+    // which is the whole point of measuring it: it lags everything else.
+    const coreTarget = 36.9 + clamp(intensity, 0, 1.3) * 1.6
+    this.coreTempC += (coreTarget - this.coreTempC) * (dt / 420)
+    // Skin runs cooler and responds faster, and is pulled down by airflow.
+    const skinTarget = 32.2 + clamp(intensity, 0, 1.3) * 1.4 - this.speedMs * 0.05
+    this.skinTempC += (skinTarget - this.skinTempC) * (dt / 90)
+
     this.manager.ingest(this.id, {
       power,
       cadence: Math.max(0, Math.round(this.cadence + (Math.random() - 0.5) * 2 * this.noise)),
       heartRate: Math.round(clamp(this.hr, this.restingHr, this.maxHr + 4)),
       speedMs: Number(this.speedMs.toFixed(2)),
       distanceM: Math.round(this.distanceM),
+      coreTempC: Number(this.coreTempC.toFixed(2)),
+      skinTempC: Number(this.skinTempC.toFixed(2)),
+      // Heat strain index as CORE reports it: 0 to 10 in normal use.
+      heatStrainIndex: Number(clamp((this.coreTempC - 36.8) * 4.5, 0, 25.4).toFixed(1)),
+      coreQuality: 3,
+      coreHrmState: 2,
     })
   }
 }

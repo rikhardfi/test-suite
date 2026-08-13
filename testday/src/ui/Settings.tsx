@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react'
 import type { Settings as SettingsShape } from '../model/storage'
 import type { Athlete } from '../model/protocol'
+import type { StoragePaths } from '../../electron/ipc'
 
 interface Props {
   settings: SettingsShape
@@ -19,6 +21,8 @@ export function Settings({ settings, onChange, onResetAthlete }: Props) {
           Reset athlete
         </button>
       </div>
+
+      <StorageSettings />
 
       <section className="panel pad">
         <h2>Athlete</h2>
@@ -121,5 +125,70 @@ export function Settings({ settings, onChange, onResetAthlete }: Props) {
         </ul>
       </section>
     </div>
+  )
+}
+
+/**
+ * Where recordings go, shown only in the desktop app because it is the only
+ * build that has anywhere to put them. The operator should be able to answer
+ * "where is my data" without asking anyone.
+ */
+function StorageSettings() {
+  const bridge = window.testday
+  const [paths, setPaths] = useState<StoragePaths | null>(null)
+
+  useEffect(() => {
+    if (!bridge) return
+    void bridge.paths().then(setPaths)
+  }, [bridge])
+
+  if (!bridge) {
+    return (
+      <section className="panel pad">
+        <h2>Recordings</h2>
+        <p className="banner error">
+          This is the browser build. Sessions are kept inside this browser and are rewritten every 15
+          seconds rather than written as they happen. Use the desktop app for anything with an athlete
+          on it.
+        </p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="panel pad">
+      <h2>Recordings</h2>
+      <p className="muted small">
+        Every sample is appended to a file and flushed to disk as it happens. Journals are written
+        locally and copied to the second location only once a session is closed, because a sync client
+        cannot be trusted with a file that is still being written.
+      </p>
+      <div className="field-grid">
+        <label>
+          Written to
+          <input readOnly value={paths?.sessionsDir ?? '…'} />
+        </label>
+        <label>
+          Second copy
+          <input readOnly value={paths?.mirrorDir ?? 'Not configured'} />
+        </label>
+      </div>
+      <div className="row">
+        <button onClick={() => void bridge.chooseMirrorFolder().then(setPaths)}>
+          Choose second copy folder
+        </button>
+        <button className="ghost" onClick={() => void bridge.setMirrorFolder(null).then(setPaths)}>
+          Clear
+        </button>
+        <button className="ghost" onClick={() => void bridge.reveal(null)}>
+          Open in Finder
+        </button>
+      </div>
+      {!paths?.mirrorDir && (
+        <p className="banner error">
+          No second copy is configured. A single disk failure would take the recordings with it.
+        </p>
+      )}
+    </section>
   )
 }

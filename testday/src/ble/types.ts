@@ -7,6 +7,16 @@ export type MetricKey =
   | 'distanceM'
   | 'inclinePct'
   | 'resistance'
+  /** CORE sensor: estimated core body temperature, °C. */
+  | 'coreTempC'
+  /** CORE sensor: skin temperature, °C. */
+  | 'skinTempC'
+  /** CORE sensor: heat strain index, 0 to 25.4. */
+  | 'heatStrainIndex'
+  /** CORE sensor: 0 invalid, 1 poor, 2 fair, 3 good, 4 excellent. */
+  | 'coreQuality'
+  /** CORE sensor: 0 HRM unsupported, 1 supported not receiving, 2 receiving. */
+  | 'coreHrmState'
 
 /** One decoded notification: whatever the packet happened to carry. */
 export type MetricUpdate = Partial<Record<MetricKey, number>> & {
@@ -21,6 +31,7 @@ export type DeviceKind =
   | 'runningPod'
   | 'trainer'
   | 'treadmill'
+  | 'coreTemp'
   | 'mock'
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'

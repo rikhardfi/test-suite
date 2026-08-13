@@ -1,19 +1,78 @@
+/*
+ * KIHU visual identity, from the KIHU Brand Book (11 March 2022) as encoded in
+ * the `kihuplot` R package, so a dashboard and a figure made in R agree.
+ *
+ * The background is the brand dark blue, the same one the dark PowerPoint
+ * template uses. Series colours are the brand's *dark background* accent set;
+ * the light-background accents are deliberately not used here because the brand
+ * book marks them as inaccessible on a dark ground.
+ *
+ * Two brand rules are respected in particular:
+ *   - Green #02890A and red #DF0000 are graph-only in the brand book, never
+ *     layout. Nothing in the interface uses them.
+ *   - Surface shades (--panel, --line) are not brand colours. They are tints of
+ *     the brand navy, needed because the brand book specifies one background,
+ *     not a hierarchy of them.
+ *
+ * Fonts are served from the app itself, not from Google. The desktop build
+ * blocks every non-local request, so a webfont link would silently fail.
+ */
+
+@font-face {
+  font-family: 'Roboto';
+  src: url('/fonts/Roboto.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Roboto Mono';
+  src: url('/fonts/RobotoMono.woff2') format('woff2-variations');
+  font-weight: 100 700;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
-  --bg: #07090d;
-  --panel: #0c1017;
-  --panel-2: #10151e;
-  --line: #1b2431;
-  --line-strong: #2a3648;
-  --text: #e6edf5;
-  --muted: #8494a8;
-  --power: #e8ecd0;
-  --target: #8fd3ff;
-  --heart: #f07ac0;
-  --lactate: #ff9f5a;
-  --accent: #4aa8ff;
-  --danger: #ff6b6b;
+  /* Brand */
+  --navy: #252f48;
+  --grey: #697f90;
+  --lightgrey: #d0dce0;
+  --cyan: #68d2df;
+  --pink: #ff65e6;
+  --lightgreen: #6aea6f;
+  --lightpurple: #b363ff;
+  --orange: #ff922d;
+
+  /* Surfaces: tints of the brand navy, not brand colours in themselves. */
+  --bg: var(--navy);
+  --panel: #2b3653;
+  --panel-2: #323e5d;
+  --line: #3a4767;
+  --line-strong: #4d5c84;
+
+  --text: #ffffff;
+  --muted: var(--lightgrey);
+  --muted-strong: var(--grey);
+
+  /* Series. Each one is a brand accent, none is invented. */
+  --power: var(--cyan);
+  --target: var(--lightgreen);
+  --heart: var(--pink);
+  --lactate: var(--lightpurple);
+  --core: var(--orange);
+  --cadence: var(--lightgrey);
+  --accent: var(--cyan);
+  /*
+   * The brand book allows no red in layout, so the alarm state is orange and
+   * earns its salience from a filled block and weight rather than from hue.
+   */
+  --danger: var(--orange);
+
   --radius: 10px;
-  --mono: 'SF Mono', 'JetBrains Mono', 'Fira Mono', ui-monospace, monospace;
+  --mono: 'Roboto Mono', 'Consolas', ui-monospace, monospace;
+  --sans: 'Roboto', 'Arial', system-ui, -apple-system, sans-serif;
   color-scheme: dark;
 }
 
@@ -31,8 +90,15 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.45 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font: 14px/1.45 var(--sans);
   -webkit-font-smoothing: antialiased;
+}
+
+/* The brand book puts Roboto Mono on headings and larger text. */
+h1,
+h2,
+h3 {
+  font-family: var(--mono);
 }
 
 h1 {
@@ -97,18 +163,22 @@ button {
 }
 button:hover:not(:disabled) {
   border-color: var(--line-strong);
-  background: #161d29;
+  background: #39456a;
 }
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 button.primary {
-  background: #17436b;
-  border-color: #2d6fa8;
+  background: var(--cyan);
+  border-color: var(--cyan);
+  color: var(--navy);
+  font-weight: 600;
 }
-button.primary:hover {
-  background: #1d5480;
+/* Brightened rather than given a second hex, so the brand colour stays exact. */
+button.primary:hover:not(:disabled) {
+  background: var(--cyan);
+  filter: brightness(1.1);
 }
 button.ghost {
   background: transparent;
@@ -120,7 +190,7 @@ button.ghost.danger {
 }
 button.on {
   border-color: var(--accent);
-  background: #12283d;
+  background: var(--panel-2);
 }
 button.dashed {
   border-style: dashed;
@@ -140,7 +210,7 @@ input,
 select {
   font: inherit;
   color: var(--text);
-  background: #0a0e15;
+  background: #1e2740;
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 6px 9px;
@@ -283,6 +353,10 @@ kbd {
   color: var(--lactate);
 }
 
+.tile.core .tile-value {
+  color: var(--core);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -323,8 +397,9 @@ kbd {
   color: var(--muted);
 }
 .pill.live {
-  background: #12432a;
-  color: #6ee7a0;
+  background: var(--panel-2);
+  color: var(--lightgreen);
+  border: 1px solid var(--lightgreen);
 }
 
 .chart {
@@ -384,7 +459,7 @@ th {
 }
 td {
   padding: 5px 8px;
-  border-bottom: 1px solid #131a25;
+  border-bottom: 1px solid var(--line);
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -393,7 +468,7 @@ td.name {
   font-family: inherit;
 }
 tr.active td {
-  background: #16202e;
+  background: var(--panel-2);
   color: var(--text);
 }
 tr.done td {
@@ -407,7 +482,7 @@ tr.done td {
   border-color: var(--line);
 }
 .laps tbody tr:hover td {
-  background: #131b27;
+  background: var(--panel-2);
 }
 .results td:first-child {
   font-family: inherit;
@@ -418,10 +493,10 @@ tr.done td {
   height: 7px;
   border-radius: 50%;
   margin-right: 6px;
-  background: #3fb950;
+  background: var(--lightgreen);
 }
 .devices .dot.reconnecting {
-  background: #d29922;
+  background: var(--orange);
 }
 .devices .dot.disconnected {
   background: var(--danger);
@@ -473,9 +548,10 @@ tr.done td {
   align-items: center;
 }
 .banner.error {
-  background: #2b1418;
-  border: 1px solid #5b2530;
-  color: #ffb4b4;
+  background: var(--panel-2);
+  border: 1px solid var(--orange);
+  border-left-width: 3px;
+  color: var(--orange);
   grid-column: 1 / -1;
 }
 
@@ -763,4 +839,119 @@ tr.done td {
     border-right: none;
     border-bottom: 1px solid var(--line);
   }
+}
+
+/* --- recording state ---------------------------------------------------- */
+
+.rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rec.good {
+  color: var(--lightgreen);
+  border-color: var(--lightgreen);
+}
+
+.rec.warn {
+  color: var(--orange);
+  border-color: var(--orange);
+}
+
+/* A failed write is the one state that is allowed to shout. */
+.rec.bad {
+  color: var(--navy);
+  background: var(--orange);
+  border-color: var(--orange);
+  font-weight: 700;
+}
+
+.rec.idle {
+  color: var(--muted);
+}
+
+.resume-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line-strong);
+  border-left: 3px solid var(--lactate);
+}
+
+.resume-banner > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.resume-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.resume-actions .ghost {
+  background: transparent;
+  color: var(--muted);
+}
+
+/* Electron has no device chooser of its own, so this is it. */
+.chooser {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.chooser-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.chooser-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+
+.chooser-list button {
+  width: 100%;
+  text-align: left;
+}
+
+.tile-note {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.repeat-bar {
+  padding: 8px 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  margin-top: 10px;
+}
+.row.nowrap {
+  flex-wrap: nowrap;
+}
+.nowrap {
+  white-space: nowrap;
 }

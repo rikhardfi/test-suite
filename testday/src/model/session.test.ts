@@ -222,3 +222,94 @@ describe('lapsFromSamples', () => {
     expect(laps[2].avgPower).toBeNull()
   })
 })
+
+/**
+ * Resuming has to put the clock back exactly where the recording stopped. Get
+ * this wrong and the second half of a test is filed against the wrong steps.
+ */
+describe('TestRunner resume', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const protocol = () =>
+    makeProtocol(
+      'Step test',
+      'bike',
+      buildStepTest({
+        startWatts: 200,
+        stepWatts: 20,
+        stepDurationS: 60,
+        stepCount: 3,
+        sampleBreakS: 30,
+      }),
+    )
+
+  const runnerFor = (p = protocol(), onSample?: (s: unknown) => void) =>
+    new TestRunner({
+      protocol: p,
+      athlete: { ...DEFAULT_ATHLETE, ftpWatts: 300 },
+      readMetrics: () => ({ power: 210, heartRate: 150 }),
+      onSample: onSample as never,
+    })
+
+  it('restores samples, lactate and the step position, and comes back paused', () => {
+    const p = protocol()
+    const first = runnerFor(p)
+    first.start()
+    // Two whole steps are 90 s each with the sampling break, so 200 s lands
+    // inside the third step.
+    for (let i = 0; i < 200 * 5; i++) vi.advanceTimersByTime(200)
+    first.recordLactate({ stepIndex: 0, mmol: 2.4 })
+    const record = first.toRecord('session_1')
+    first.dispose()
+
+    const second = runnerFor(p)
+    second.resumeFrom(record)
+    const snapshot = second.snapshot()
+
+    expect(second.recordedSamples).toHaveLength(record.samples.length)
+    expect(second.lactateEntries).toHaveLength(1)
+    expect(snapshot.state).toBe('paused')
+    expect(snapshot.stepIndex).toBe(2)
+    expect(Math.round(snapshot.elapsedS)).toBe(record.samples.at(-1)!.t)
+  })
+
+  it('does not replay restored samples to the recorder', () => {
+    const p = protocol()
+    const first = runnerFor(p)
+    first.start()
+    for (let i = 0; i < 30 * 5; i++) vi.advanceTimersByTime(200)
+    const record = first.toRecord('session_1')
+    first.dispose()
+
+    const emitted: unknown[] = []
+    const second = runnerFor(p, (s) => emitted.push(s))
+    second.resumeFrom(record)
+
+    // They are already in the journal; re-emitting would duplicate every one.
+    expect(emitted).toHaveLength(0)
+  })
+
+  it('continues the sample stream from where it stopped', () => {
+    const p = protocol()
+    const first = runnerFor(p)
+    first.start()
+    for (let i = 0; i < 30 * 5; i++) vi.advanceTimersByTime(200)
+    const record = first.toRecord('session_1')
+    const lastT = record.samples.at(-1)!.t
+    first.dispose()
+
+    const emitted: { t: number }[] = []
+    const second = runnerFor(p, (s) => emitted.push(s as { t: number }))
+    second.resumeFrom(record)
+    second.start()
+    for (let i = 0; i < 5 * 5; i++) vi.advanceTimersByTime(200)
+
+    expect(emitted[0]!.t).toBeGreaterThan(lastT)
+    expect(second.recordedSamples.at(-1)!.t).toBeGreaterThan(lastT)
+  })
+})

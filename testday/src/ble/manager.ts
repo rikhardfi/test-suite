@@ -1,6 +1,7 @@
-import { CHR, SVC } from './uuids'
+import { CHR, CORE_CHR, CORE_SVC, SVC } from './uuids'
 import {
   RevolutionCounter,
+  parseCoreTemperature,
   parseCsc,
   parseCyclingPower,
   parseHeartRate,
@@ -26,7 +27,8 @@ export interface SensorProfile {
   label: string
   hint: string
   kind: DeviceKind
-  service: number
+  /** A SIG-assigned 16-bit number, or a full UUID for a vendor service. */
+  service: number | string
   provides: readonly MetricKey[]
 }
 
@@ -71,6 +73,14 @@ export const SENSOR_PROFILES: readonly SensorProfile[] = [
     service: SVC.cyclingSpeedCadence,
     provides: ['speedMs', 'cadence'],
   },
+  {
+    key: 'core',
+    label: 'CORE body temperature',
+    hint: 'Core and skin temperature, heat strain index',
+    kind: 'coreTemp',
+    service: CORE_SVC,
+    provides: ['coreTempC', 'skinTempC', 'heatStrainIndex', 'coreQuality', 'coreHrmState', 'heartRate'],
+  },
 ]
 
 /**
@@ -80,12 +90,19 @@ export const SENSOR_PROFILES: readonly SensorProfile[] = [
  */
 const KIND_PRIORITY: Record<MetricKey, DeviceKind[]> = {
   power: ['powerMeter', 'trainer', 'treadmill', 'mock'],
-  heartRate: ['heartRate', 'trainer', 'treadmill', 'mock'],
+  // CORE relays the strap it is paired to, so it ranks below a strap read
+  // directly but above a machine's own estimate.
+  heartRate: ['heartRate', 'coreTemp', 'trainer', 'treadmill', 'mock'],
   cadence: ['powerMeter', 'speedCadence', 'runningPod', 'trainer', 'treadmill', 'mock'],
   speedMs: ['treadmill', 'runningPod', 'trainer', 'speedCadence', 'mock'],
   distanceM: ['treadmill', 'runningPod', 'trainer', 'speedCadence', 'mock'],
   inclinePct: ['treadmill', 'trainer', 'mock'],
   resistance: ['trainer', 'treadmill', 'mock'],
+  coreTempC: ['coreTemp', 'mock'],
+  skinTempC: ['coreTemp', 'mock'],
+  heatStrainIndex: ['coreTemp', 'mock'],
+  coreQuality: ['coreTemp', 'mock'],
+  coreHrmState: ['coreTemp', 'mock'],
 }
 
 /** A value older than this is not shown, so a dropped sensor blanks out. */
@@ -315,6 +332,12 @@ export class SensorManager {
         await this.notify(entry, service, CHR.rscMeasurement, parseRsc)
         break
 
+      case 'core':
+        if (!(await this.notify(entry, service, CORE_CHR.measurement, parseCoreTemperature))) {
+          throw new Error('CORE sensor exposes no temperature measurement')
+        }
+        break
+
       case 'ftms':
         await this.openFtms(entry, service)
         break
@@ -348,7 +371,7 @@ export class SensorManager {
   private async notify(
     entry: Entry,
     service: BluetoothRemoteGATTService,
-    uuid: number,
+    uuid: number | string,
     parse: (view: DataView) => MetricUpdate,
   ): Promise<boolean> {
     let chr: BluetoothRemoteGATTCharacteristic

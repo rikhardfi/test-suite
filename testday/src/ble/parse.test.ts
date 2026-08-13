@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   RevolutionCounter,
+  parseCoreTemperature,
   parseCsc,
   parseCyclingPower,
   parseHeartRate,
@@ -132,5 +133,97 @@ describe('parseTreadmillData', () => {
     const result = parseTreadmillData(view(...le16(flags), ...le16(1600), ...le16(15), ...le16(0)))
     expect(result.speedMs).toBeCloseTo(16 / 3.6, 5)
     expect(result.inclinePct).toBeCloseTo(1.5, 5)
+  })
+})
+
+/**
+ * The CORE fields are positional and optional: an absent one shifts every later
+ * field along. A mis-ordered read yields a plausible temperature rather than an
+ * error, so each flag combination is checked against a hand-built packet.
+ */
+describe('parseCoreTemperature', () => {
+  it('reads the mandatory core temperature alone', () => {
+    // flags 0x00: nothing optional present. 3782 = 37.82 °C.
+    expect(parseCoreTemperature(view(0x00, ...le16(3782)))).toEqual({ coreTempC: 37.82 })
+  })
+
+  it('reads skin temperature when its flag is set', () => {
+    expect(parseCoreTemperature(view(0x01, ...le16(3782), ...le16(3310)))).toEqual({
+      coreTempC: 37.82,
+      skinTempC: 33.1,
+    })
+  })
+
+  it('skips the reserved field so later fields stay aligned', () => {
+    // flags 0x22: core reserved (bit 1) + heat strain index (bit 5).
+    // Without skipping the reserved 2 bytes, the HSI would be read from them.
+    expect(parseCoreTemperature(view(0x22, ...le16(3782), ...le16(999), 42))).toEqual({
+      coreTempC: 37.82,
+      heatStrainIndex: 4.2,
+    })
+  })
+
+  it('decodes quality and heart-rate-monitor state', () => {
+    // flags 0x04: quality and state present. 0x23 = quality 3 (good), state 2.
+    expect(parseCoreTemperature(view(0x04, ...le16(3700), 0x23))).toEqual({
+      coreTempC: 37,
+      coreQuality: 3,
+      coreHrmState: 2,
+    })
+  })
+
+  it('treats the not-available codes for quality and state as absent', () => {
+    // quality 0b111 and state 0b11 both mean "not reported".
+    expect(parseCoreTemperature(view(0x04, ...le16(3700), 0x37))).toEqual({ coreTempC: 37 })
+  })
+
+  it('reports an invalid quality rather than hiding it', () => {
+    // Quality 0 is "invalid", which is a reading about the reading, not a gap.
+    expect(parseCoreTemperature(view(0x04, ...le16(3700), 0x00))).toEqual({
+      coreTempC: 37,
+      coreQuality: 0,
+      coreHrmState: 0,
+    })
+  })
+
+  it('reads a relayed heart rate but ignores the zero that means no signal', () => {
+    expect(parseCoreTemperature(view(0x10, ...le16(3700), 168))).toEqual({
+      coreTempC: 37,
+      heartRate: 168,
+    })
+    expect(parseCoreTemperature(view(0x10, ...le16(3700), 0))).toEqual({ coreTempC: 37 })
+  })
+
+  it('reads every optional field together, in spec order', () => {
+    // flags 0x37 = skin | reserved | quality | HR | HSI, unit °C.
+    expect(
+      parseCoreTemperature(view(0x37, ...le16(3812), ...le16(3305), ...le16(0), 0x22, 172, 51)),
+    ).toEqual({
+      coreTempC: 38.12,
+      skinTempC: 33.05,
+      coreQuality: 2,
+      coreHrmState: 2,
+      heartRate: 172,
+      heatStrainIndex: 5.1,
+    })
+  })
+
+  it('converts Fahrenheit to Celsius when the unit flag is set', () => {
+    // flags 0x09 = skin present, unit °F. 10000 = 100.00 °F = 37.78 °C.
+    const out = parseCoreTemperature(view(0x09, ...le16(10000), ...le16(9500)))
+    expect(out.coreTempC).toBeCloseTo(37.78, 2)
+    expect(out.skinTempC).toBeCloseTo(35, 2)
+  })
+
+  it('omits the reading when the sensor sends the no-data sentinel', () => {
+    expect(parseCoreTemperature(view(0x00, ...le16(0x7fff)))).toEqual({})
+    expect(parseCoreTemperature(view(0x01, ...le16(3700), ...le16(0x7fff)))).toEqual({
+      coreTempC: 37,
+    })
+  })
+
+  it('does not read past a truncated packet', () => {
+    // Flags claim skin and HSI, but the payload stops after the core value.
+    expect(parseCoreTemperature(view(0x21, ...le16(3700)))).toEqual({ coreTempC: 37 })
   })
 })

@@ -13,6 +13,13 @@ export function samplesToCsv(session: SessionRecord): string {
     'speed_ms',
     'speed_kph',
     'pace_s_per_km',
+    'core_temp_c',
+    'skin_temp_c',
+    'heat_strain_index',
+    // Carried into the export so a reading can be judged later against the
+    // quality the sensor itself put on it.
+    'core_quality',
+    'core_hrm_state',
   ]
   const rows = session.samples.map((s) =>
     [
@@ -26,6 +33,11 @@ export function samplesToCsv(session: SessionRecord): string {
       s.speedMs?.toFixed(2) ?? '',
       s.speedMs ? (s.speedMs * 3.6).toFixed(2) : '',
       s.speedMs && s.speedMs > 0.1 ? Math.round(1000 / s.speedMs) : '',
+      s.coreTempC?.toFixed(2) ?? '',
+      s.skinTempC?.toFixed(2) ?? '',
+      s.heatStrainIndex?.toFixed(1) ?? '',
+      s.coreQuality ?? '',
+      s.coreHrmState ?? '',
     ].join(','),
   )
   return [header.join(','), ...rows].join('\n')

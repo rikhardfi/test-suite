@@ -274,3 +274,79 @@ export function parseSpeedRange(view: DataView): { min: number; max: number; ste
     step: view.getUint16(4, true) * 0.01,
   }
 }
+
+/** Data quality reported alongside a CORE reading, worst to best. */
+export const CORE_QUALITY = ['invalid', 'poor', 'fair', 'good', 'excellent'] as const
+export type CoreQuality = (typeof CORE_QUALITY)[number]
+
+/** Whether the CORE sensor is receiving a heart rate signal, which it uses. */
+export const CORE_HRM_STATE = ['not supported', 'not receiving', 'receiving'] as const
+
+/** Sentinel the CORE spec uses for "no valid reading right now". */
+const CORE_NO_DATA = 0x7fff
+
+/**
+ * CORE Body Temperature measurement characteristic.
+ *
+ * Layout, little-endian, per the Core Body Temperature Service specification:
+ *
+ * | Field                  | Type   | Present when | Units      |
+ * | ---------------------- | ------ | ------------ | ---------- |
+ * | Flags                  | uint8  | always       |            |
+ * | Core body temperature  | sint16 | always       | 0.01 °C/°F |
+ * | Skin temperature       | sint16 | flag bit 0   | 0.01 °C/°F |
+ * | Core reserved          | sint16 | flag bit 1   |            |
+ * | Quality and state      | uint8  | flag bit 2   |            |
+ * | Heart rate             | uint8  | flag bit 4   | bpm        |
+ * | Heat strain index      | uint8  | flag bit 5   | 0.1 a.u.   |
+ *
+ * Flag bit 3 selects the temperature unit: 0 is °C, 1 is °F. Everything is
+ * converted to °C here so nothing downstream has to carry a unit around.
+ *
+ * The optional fields are positional, so an absent one shifts every later
+ * field. Reading them in the wrong order yields plausible numbers rather than
+ * an error, which is exactly the kind of silent wrongness the tests exist for.
+ */
+export function parseCoreTemperature(view: DataView): MetricUpdate {
+  const r = new Reader(view)
+  const flags = r.u8()
+  const fahrenheit = bit(flags, 3)
+  const toC = (raw: number): number =>
+    fahrenheit ? ((raw / 100 - 32) * 5) / 9 : raw / 100
+
+  const out: MetricUpdate = {}
+
+  const core = r.i16()
+  if (core !== CORE_NO_DATA) out.coreTempC = round2(toC(core))
+
+  if (bit(flags, 0) && r.remaining >= 2) {
+    const skin = r.i16()
+    if (skin !== CORE_NO_DATA) out.skinTempC = round2(toC(skin))
+  }
+
+  // Present but unused: reading it is what keeps the later offsets right.
+  if (bit(flags, 1) && r.remaining >= 2) r.skip(2)
+
+  if (bit(flags, 2) && r.remaining >= 1) {
+    const qualityAndState = r.u8()
+    const quality = qualityAndState & 0x07
+    const hrmState = (qualityAndState >> 4) & 0x03
+    // 0b111 means the sensor is not reporting a quality at all.
+    if (quality !== 0x07) out.coreQuality = quality
+    if (hrmState !== 0x03) out.coreHrmState = hrmState
+  }
+
+  if (bit(flags, 4) && r.remaining >= 1) {
+    const hr = r.u8()
+    // The spec sets this to 0 when no heart rate signal is being received.
+    if (hr > 0) out.heartRate = hr
+  }
+
+  if (bit(flags, 5) && r.remaining >= 1) {
+    out.heatStrainIndex = r.u8() / 10
+  }
+
+  return out
+}
+
+const round2 = (n: number): number => Math.round(n * 100) / 100

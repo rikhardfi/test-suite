@@ -17,6 +17,18 @@ export type MetricKey =
   | 'coreQuality'
   /** CORE sensor: 0 HRM unsupported, 1 supported not receiving, 2 receiving. */
   | 'coreHrmState'
+  /** Ventilation wearable: minute ventilation, L/min. */
+  | 'ventilationLMin'
+  /** Ventilation wearable: breaths per minute. */
+  | 'breathingRate'
+  /**
+   * Environment monitor. These move on a scale of minutes, not seconds, and are
+   * recorded on their own clock rather than sampled onto the 1 Hz series.
+   */
+  | 'co2Ppm'
+  | 'ambientTempC'
+  | 'humidityPct'
+  | 'pressureHpa'
 
 /** One decoded notification: whatever the packet happened to carry. */
 export type MetricUpdate = Partial<Record<MetricKey, number>> & {
@@ -32,6 +44,8 @@ export type DeviceKind =
   | 'trainer'
   | 'treadmill'
   | 'coreTemp'
+  | 'ventilation'
+  | 'environment'
   | 'mock'
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'

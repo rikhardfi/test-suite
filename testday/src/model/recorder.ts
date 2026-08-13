@@ -1,6 +1,6 @@
 import { JOURNAL_VERSION } from './journal'
 import type { JournalEventKind, JournalHeader, SessionSummary } from './journal'
-import type { LactateEntry, Sample, SessionRecord } from './session'
+import type { Environment, LactateEntry, Sample, SessionRecord } from './session'
 import type { Protocol, Athlete } from './protocol'
 import type { MetricKey } from '../ble/types'
 
@@ -31,6 +31,8 @@ export interface Recorder {
   raw(deviceId: string, t: number, values: Partial<Record<MetricKey, number>>): void
   /** Beat-to-beat intervals, which arrive per beat rather than per second. */
   rr(t: number, intervalsMs: number[]): void
+  /** Conditions, on their own slow clock. */
+  environment(t: number, reading: Omit<Environment, 'at'>): void
   /** Returns how many verified copies of the recording now exist. */
   finish(endedAt: number): Promise<FinishResult>
 

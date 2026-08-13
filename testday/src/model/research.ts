@@ -212,6 +212,24 @@ export function researchSidecar(session: SessionRecord, options: SidecarOptions)
 
       devices: options.devices ?? [],
 
+      /**
+       * Conditions, on their own clock and with their provenance. Recorded
+       * because a result without them cannot be read properly a year later:
+       * cold, dry or CO₂-loaded indoor air is a conditioning load the airway
+       * carries, not context around the measurement.
+       */
+      environment: (session.environment ?? []).map((reading) => ({
+        at: new Date(reading.at).toISOString(),
+        tempC: reading.tempC ?? null,
+        humidityPct: reading.humidityPct ?? null,
+        co2Ppm: reading.co2Ppm ?? null,
+        pressureHpa: reading.pressureHpa ?? null,
+        altitudeM: reading.altitudeM ?? null,
+        setting: reading.setting ?? null,
+        note: reading.note ?? null,
+        source: reading.source,
+      })),
+
       methods: {
         vo2: Object.entries(VO2_METHODS).map(([key, info]) => ({
           id: key,
@@ -245,6 +263,7 @@ export function researchSidecar(session: SessionRecord, options: SidecarOptions)
         'vo2_est_ml_kg_min is estimated from a population regression and is not a measured VO2.',
         'incline_source and distance_source distinguish a measurement from an assumption.',
         'A blank cell means the metric was not reported, which is not the same as zero.',
+        'Environment readings carry their own timestamps and are not resampled onto the 1 Hz clock.',
       ],
     },
     null,

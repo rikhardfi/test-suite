@@ -6,7 +6,7 @@ import {
   type JournalHeader,
   type SessionSummary,
 } from './journal'
-import type { LactateEntry, RrEntry, Sample, SessionRecord } from './session'
+import type { Environment, LactateEntry, RrEntry, Sample, SessionRecord } from './session'
 import type { FinishResult, Recorder, RecorderStatus } from './recorder'
 
 const AUTOSAVE_MS = 15000
@@ -26,6 +26,7 @@ export function createIdbRecorder(): Recorder {
   let samples: Sample[] = []
   let lactate: LactateEntry[] = []
   let rr: RrEntry[] = []
+  let environment: Environment[] = []
   let timer: ReturnType<typeof setInterval> | null = null
   let lastDurableAt: number | null = null
   let error: string | null = null
@@ -54,6 +55,7 @@ export function createIdbRecorder(): Recorder {
       samples,
       lactate,
       rr: rr.length ? rr : undefined,
+      environment: environment.length ? environment : undefined,
     }
   }
 
@@ -79,6 +81,7 @@ export function createIdbRecorder(): Recorder {
       samples = []
       lactate = []
       rr = []
+      environment = []
       error = null
       if (timer) clearInterval(timer)
       timer = setInterval(() => void persist(), AUTOSAVE_MS)
@@ -108,6 +111,10 @@ export function createIdbRecorder(): Recorder {
 
     rr(t: number, intervalsMs: number[]) {
       rr.push({ t, ms: intervalsMs })
+    },
+
+    environment(_t: number, reading) {
+      environment.push({ ...reading, at: Date.now() })
     },
 
     async finish(endedAt: number): Promise<FinishResult> {
@@ -158,6 +165,7 @@ export function createIdbRecorder(): Recorder {
       samples = [...session.samples]
       lactate = [...session.lactate]
       rr = [...(session.rr ?? [])]
+      environment = [...(session.environment ?? [])]
       if (timer) clearInterval(timer)
       timer = setInterval(() => void persist(), AUTOSAVE_MS)
       emit()

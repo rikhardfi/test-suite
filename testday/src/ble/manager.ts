@@ -1,6 +1,7 @@
-import { CHR, CORE_CHR, CORE_SVC, SVC } from './uuids'
+import { ARANET_CHR, ARANET_SVC, CHR, CORE_CHR, CORE_SVC, SVC } from './uuids'
 import {
   RevolutionCounter,
+  parseAranet,
   parseCoreTemperature,
   parseCsc,
   parseCyclingPower,
@@ -10,6 +11,8 @@ import {
   parseTreadmillData,
 } from './parse'
 import { FtmsControl, readFtmsCapabilities } from './ftms'
+import { staleAfterMs } from './metrics'
+import { TraceRecorder } from './trace'
 import type {
   DeviceKind,
   MetricKey,
@@ -30,6 +33,19 @@ export interface SensorProfile {
   /** A SIG-assigned 16-bit number, or a full UUID for a vendor service. */
   service: number | string
   provides: readonly MetricKey[]
+  /**
+   * `environment` marks a device whose readings move on a scale of minutes.
+   * They are recorded on their own clock rather than sampled onto the 1 Hz
+   * series, because a five-minute value carried at 1 Hz is 299 repeats and one
+   * measurement, and nothing downstream can tell which is which.
+   */
+  channel?: 'metric' | 'environment'
+  /**
+   * Set when the device may refuse to talk until it has been bonded, which Web
+   * Bluetooth cannot do. Surfaced in the interface so a failure to connect
+   * reads as a known limitation rather than as a bug.
+   */
+  mayRequirePairing?: boolean
 }
 
 export const SENSOR_PROFILES: readonly SensorProfile[] = [
@@ -81,6 +97,21 @@ export const SENSOR_PROFILES: readonly SensorProfile[] = [
     service: CORE_SVC,
     provides: ['coreTempC', 'skinTempC', 'heatStrainIndex', 'coreQuality', 'coreHrmState', 'heartRate'],
   },
+  {
+    key: 'aranet',
+    label: 'Aranet4 air quality',
+    hint: 'CO₂, temperature, humidity, pressure. May need pairing.',
+    kind: 'environment',
+    service: ARANET_SVC,
+    provides: ['co2Ppm', 'ambientTempC', 'humidityPct', 'pressureHpa'],
+    // Every one of these moves on a scale of minutes. Recorded on its own
+    // clock, summarised per session, and never resampled up to 1 Hz.
+    channel: 'environment',
+    // Recent firmware bonds before it will hand over a reading, and Web
+    // Bluetooth cannot drive a passkey flow. Whether this works is a question
+    // about the firmware in front of you.
+    mayRequirePairing: true,
+  },
 ]
 
 /**
@@ -103,10 +134,13 @@ const KIND_PRIORITY: Record<MetricKey, DeviceKind[]> = {
   heatStrainIndex: ['coreTemp', 'mock'],
   coreQuality: ['coreTemp', 'mock'],
   coreHrmState: ['coreTemp', 'mock'],
+  ventilationLMin: ['ventilation', 'mock'],
+  breathingRate: ['ventilation', 'mock'],
+  co2Ppm: ['environment', 'mock'],
+  ambientTempC: ['environment', 'mock'],
+  humidityPct: ['environment', 'mock'],
+  pressureHpa: ['environment', 'mock'],
 }
-
-/** A value older than this is not shown, so a dropped sensor blanks out. */
-const STALE_MS = 5000
 
 /** How long beat intervals are kept for a rolling variability window. */
 const RR_HISTORY_MS = 5 * 60 * 1000
@@ -134,6 +168,8 @@ interface Entry {
   /** Held so a device can be reconnected without the caller supplying it again. */
   profile?: SensorProfile
   reconnectAttempts?: number
+  /** Set for devices that are polled rather than notified, e.g. the Aranet. */
+  pollTimer?: ReturnType<typeof setInterval>
 }
 
 export class SensorManager {
@@ -148,6 +184,11 @@ export class SensorManager {
   private wheelCircumferenceM = 2.096
   /** True while a session is recording, which is when sensors are chased hardest. */
   private recording = false
+  /**
+   * Captures raw notification bytes when it is running. Off by default: it is a
+   * debugging and reverse-engineering tool, not part of a recording.
+   */
+  readonly trace = new TraceRecorder()
   /**
    * Beat intervals as they arrive, kept for a few minutes so a rolling HRV
    * window has something to work on. Bounded by time rather than by count,
@@ -200,14 +241,14 @@ export class SensorManager {
     if (preferredId) {
       const entry = this.entries.get(preferredId)
       const held = entry?.values.get(metric)
-      if (entry && held && now - held.at < STALE_MS) return entry.device
+      if (entry && held && now - held.at < staleAfterMs(metric)) return entry.device
     }
 
     const order = KIND_PRIORITY[metric]
     let best: { device: SensorDevice; rank: number } | null = null
     for (const entry of this.entries.values()) {
       const held = entry.values.get(metric)
-      if (!held || now - held.at >= STALE_MS) continue
+      if (!held || now - held.at >= staleAfterMs(metric)) continue
       const rank = order.indexOf(entry.device.kind)
       const effective = rank === -1 ? order.length : rank
       if (!best || effective < best.rank) best = { device: entry.device, rank: effective }
@@ -359,6 +400,78 @@ export class SensorManager {
   }
 
   /**
+   * Connects to a device with no known profile and subscribes to everything it
+   * will notify on, recording the bytes.
+   *
+   * This is how a parser gets written for hardware whose protocol is not
+   * published. It cannot be written from a specification, because there is not
+   * one; it has to be reversed from a capture taken while the device was doing
+   * something known. Nothing is decoded and nothing reaches the metric stream:
+   * inventing an interpretation of bytes nobody has decoded would be worse than
+   * having no reading at all.
+   *
+   * `serviceUuid` has to be supplied by whoever is doing the reversing, since
+   * Web Bluetooth will not enumerate services that were not asked for.
+   */
+  async captureUnknown(serviceUuid: string, label = 'Unknown device'): Promise<SensorDevice> {
+    if (!isWebBluetoothAvailable()) {
+      throw new Error('Web Bluetooth is not available in this browser.')
+    }
+
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [serviceUuid] }],
+      optionalServices: [serviceUuid, SVC.battery, SVC.deviceInformation],
+    })
+
+    const id = device.id || `capture:${device.name ?? label}`
+    const sensor: SensorDevice = {
+      id,
+      name: device.name ?? label,
+      kind: 'mock',
+      provides: [],
+      state: 'connecting',
+      disconnect: () => this.entries.get(id)?.gattDevice?.gatt?.disconnect(),
+    }
+    const entry: Entry = { device: sensor, values: new Map(), gattDevice: device }
+    this.entries.set(id, entry)
+    this.emit()
+
+    try {
+      const server = await device.gatt!.connect()
+      const service = await server.getPrimaryService(serviceUuid)
+      const characteristics = await service.getCharacteristics()
+
+      let subscribed = 0
+      for (const chr of characteristics) {
+        if (!chr.properties.notify && !chr.properties.indicate) continue
+        chr.addEventListener('characteristicvaluechanged', (event) => {
+          const value = (event.target as BluetoothRemoteGATTCharacteristic).value
+          if (!value) return
+          // Captured, never interpreted.
+          this.trace.capture(id, sensor.name, chr.uuid, value)
+        })
+        try {
+          await chr.startNotifications()
+          subscribed += 1
+        } catch {
+          // Some characteristics advertise notify and then refuse it.
+        }
+      }
+
+      if (subscribed === 0) {
+        throw new Error('That service exposes nothing that notifies, so there is nothing to capture.')
+      }
+    } catch (error) {
+      this.remove(id)
+      throw error
+    }
+
+    sensor.state = 'connected'
+    this.emit()
+    if (!this.trace.isRecording) this.trace.start()
+    return sensor
+  }
+  /**
    * Reconnects with capped backoff.
    *
    * Never gives up while a session is recording. A strap that drops out at
@@ -458,9 +571,57 @@ export class SensorManager {
       case 'ftms':
         await this.openFtms(entry, service)
         break
+
+      case 'aranet': {
+        // Notify where the firmware offers it, and fall back to polling on the
+        // device's own measurement interval. Polling is not a workaround here:
+        // this device genuinely has nothing new to say between measurements.
+        const notified = await this.notify(
+          entry,
+          service,
+          ARANET_CHR.currentReadings,
+          parseAranet,
+        )
+        if (!notified) await this.pollAranet(entry, service)
+        break
+      }
     }
 
     void this.readBattery(entry, server)
+  }
+
+  /**
+   * Reads the Aranet on its own schedule.
+   *
+   * The interval characteristic says how often the device measures; anything
+   * more often than that is asking a question whose answer cannot have changed.
+   * Falls back to five minutes, which is the device's default.
+   */
+  private async pollAranet(entry: Entry, service: BluetoothRemoteGATTService): Promise<void> {
+    const readings = await service.getCharacteristic(ARANET_CHR.currentReadings)
+
+    let intervalS = 300
+    try {
+      const chr = await service.getCharacteristic(ARANET_CHR.interval)
+      const value = (await chr.readValue()).getUint16(0, true)
+      if (value > 0 && value <= 3600) intervalS = value
+    } catch {
+      // Not every firmware exposes it. The default is close enough.
+    }
+
+    const read = async () => {
+      if (!this.entries.has(entry.device.id)) return
+      try {
+        this.ingest(entry.device.id, parseAranet(await readings.readValue()))
+      } catch {
+        // A failed read is not worth interrupting a test for; the next one
+        // is only a few minutes away and the value is already marked stale.
+      }
+    }
+
+    await read()
+    const timer = setInterval(() => void read(), intervalS * 1000)
+    entry.pollTimer = timer
   }
 
   private async openFtms(entry: Entry, service: BluetoothRemoteGATTService): Promise<void> {
@@ -501,11 +662,16 @@ export class SensorManager {
     chr.addEventListener('characteristicvaluechanged', (event) => {
       const value = (event.target as BluetoothRemoteGATTCharacteristic).value
       if (!value) return
+      let decoded: MetricUpdate | undefined
       try {
-        this.ingest(entry.device.id, parse(value))
+        decoded = parse(value)
+        this.ingest(entry.device.id, decoded)
       } catch {
         // A malformed packet must not tear down the notification stream.
       }
+      // Captured after parsing and outside the try, so a packet that broke the
+      // parser is still kept: that is the one worth having.
+      this.trace.capture(entry.device.id, entry.device.name, String(uuid), value, decoded)
     })
     await chr.startNotifications()
     return true
@@ -526,6 +692,7 @@ export class SensorManager {
     const entry = this.entries.get(deviceId)
     if (!entry) return
     this.entries.delete(deviceId)
+    if (entry.pollTimer) clearInterval(entry.pollTimer)
     entry.ftms?.forgetControl()
     try {
       entry.gattDevice?.gatt?.disconnect()

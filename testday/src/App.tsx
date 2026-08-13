@@ -4,6 +4,7 @@ import { Builder } from './ui/Builder'
 import { Analysis } from './ui/Analysis'
 import { SensorPanel } from './ui/SensorPanel'
 import { TilePicker } from './ui/TilePicker'
+import { EnvironmentForm } from './ui/EnvironmentForm'
 import { Settings } from './ui/Settings'
 import { SensorManager } from './ble/manager'
 import { DEFAULT_ATHLETE, newId, type Athlete, type Protocol } from './model/protocol'
@@ -60,6 +61,7 @@ export default function App() {
   const [view, setView] = useState<View>('run')
   const [sensorsOpen, setSensorsOpen] = useState(false)
   const [tilesOpen, setTilesOpen] = useState(false)
+  const [environmentOpen, setEnvironmentOpen] = useState(false)
   const [activeProtocol, setActiveProtocol] = useState<Protocol | null>(null)
   const [runner, setRunner] = useState<TestRunner | null>(null)
   const [bestCurve, setBestCurve] = useState<{ durationS: number; watts: number }[]>([])
@@ -103,6 +105,22 @@ export default function App() {
       if (Object.keys(values).length > 0) recorder.raw(deviceId, t, values)
       if (rrIntervalsMs?.length) recorder.rr(t, rrIntervalsMs)
     })
+    /**
+     * Environment readings go to their own slow channel rather than into the
+     * 1 Hz stream. A monitor that measures every five minutes would otherwise
+     * contribute 299 carried-forward values and one measurement per reading,
+     * and nothing downstream could tell them apart.
+     */
+    const stopEnvironment = manager.onMetric((_deviceId, update) => {
+      const reading = {
+        tempC: update.ambientTempC,
+        humidityPct: update.humidityPct,
+        co2Ppm: update.co2Ppm,
+        pressureHpa: update.pressureHpa,
+      }
+      if (Object.values(reading).every((v) => v == null)) return
+      recorder.environment(Number(runner.elapsed.toFixed(2)), { ...reading, source: 'sensor' })
+    })
     const stopSources = manager.onSourceChange((changes) => {
       for (const change of changes) {
         recorder.event('sourceChanged', {
@@ -115,6 +133,7 @@ export default function App() {
     })
     return () => {
       stopMetrics()
+      stopEnvironment()
       stopSources()
     }
   }, [status.recording, runner, manager, recorder])
@@ -337,6 +356,7 @@ export default function App() {
             frontTiles={settings.dashboardTiles?.[activeProtocol.sport] ?? []}
             onOpenSensors={() => setSensorsOpen(true)}
             onEditTiles={() => setTilesOpen(true)}
+            onEditEnvironment={() => setEnvironmentOpen(true)}
             onFinish={finish}
           />
         ) : (
@@ -384,6 +404,18 @@ export default function App() {
 
       {sensorsOpen && (
         <SensorPanel manager={manager} ftpWatts={settings.athlete.ftpWatts} onClose={() => setSensorsOpen(false)} />
+      )}
+
+      {environmentOpen && (
+        <EnvironmentForm
+          metrics={manager.read()}
+          onSave={(reading) => {
+            recorder.environment(runner?.elapsed ?? 0, reading)
+            setEnvironmentOpen(false)
+            setToast('Conditions recorded with the session.')
+          }}
+          onClose={() => setEnvironmentOpen(false)}
+        />
       )}
 
       {tilesOpen && activeProtocol && (

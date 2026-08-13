@@ -1,5 +1,12 @@
 import type { Athlete, Protocol } from './protocol'
-import type { LactateEntry, RrEntry, Sample, SessionEvent, SessionRecord } from './session'
+import type {
+  Environment,
+  LactateEntry,
+  RrEntry,
+  Sample,
+  SessionEvent,
+  SessionRecord,
+} from './session'
 import type { MetricKey } from '../ble/types'
 
 /**
@@ -108,6 +115,28 @@ export interface JournalRr {
 }
 
 /**
+ * Conditions the test was run in, on their own slow clock.
+ *
+ * Its own record kind rather than a sample field because an environment
+ * monitor speaks every few minutes. Written at 1 Hz it would be 299 repeats
+ * and one measurement, and nothing reading it afterwards could tell which was
+ * which.
+ */
+export interface JournalEnvironment {
+  type: 'environment'
+  at: number
+  t: number
+  tempC?: number
+  humidityPct?: number
+  co2Ppm?: number
+  pressureHpa?: number
+  altitudeM?: number
+  setting?: 'indoor' | 'outdoor'
+  note?: string
+  source: 'sensor' | 'manual' | 'mixed'
+}
+
+/**
  * Samples and lactate entries are stored flat rather than nested, because the
  * operator reads this file with `tail -f` during a test. Neither `Sample` nor
  * `LactateEntry` has a `type` key, so there is nothing to collide with.
@@ -121,6 +150,7 @@ export type JournalRecord =
   | JournalReopen
   | JournalRaw
   | JournalRr
+  | JournalEnvironment
 
 export interface DecodedJournal {
   records: JournalRecord[]
@@ -191,6 +221,7 @@ const KNOWN_RECORD_TYPES = new Set([
   'reopened',
   'raw',
   'rr',
+  'environment',
 ])
 
 export const headerOf = (records: readonly JournalRecord[]): JournalHeader | null =>
@@ -233,6 +264,7 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
   const samples: Sample[] = []
   const rr: RrEntry[] = []
   const events: SessionEvent[] = []
+  const environment: Environment[] = []
   // Insertion-ordered, so a corrected value keeps the position of the original.
   const lactate = new Map<number, LactateEntry>()
   let endedAt: number | undefined
@@ -250,6 +282,11 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
       case 'event':
         events.push({ kind: record.kind, at: record.at, data: record.data })
         break
+      case 'environment': {
+        const { type: _type, t: _t, ...rest } = record
+        environment.push(rest)
+        break
+      }
       case 'lactate': {
         const { type: _type, ...entry } = record
         // Last write wins, the same way `TestRunner.recordLactate` behaves in
@@ -282,6 +319,7 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
     lactate: [...lactate.values()].filter((entry) => !entry.removed),
     rr: rr.length ? rr : undefined,
     events: events.length ? events : undefined,
+    environment: environment.length ? environment : undefined,
   }
 }
 

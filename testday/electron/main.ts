@@ -9,6 +9,7 @@ import { SessionStore, isClosed, type OpenSession } from './sessions'
 import { IPC, type CloseResult, type StoragePaths, type WriteStatus } from './ipc'
 import type {
   JournalEvent,
+  JournalEnvironment,
   JournalHeader,
   JournalRaw,
   JournalRecord,
@@ -451,6 +452,12 @@ function registerHandlers(): void {
 
   ipcMain.on(IPC.appendRr, (_event, rr: Omit<JournalRr, 'type'>) => {
     guardedAppendQuiet({ type: 'rr', ...rr })
+  })
+
+  ipcMain.on(IPC.appendEnvironment, (_event, reading: Omit<JournalEnvironment, 'type'>) => {
+    // Not quiet: there are only a handful of these in a session and every one
+    // of them matters to how the result is read afterwards.
+    guardedAppend({ type: 'environment', ...reading })
   })
 
   ipcMain.handle(IPC.close, (_event, endedAt: number): CloseResult => {

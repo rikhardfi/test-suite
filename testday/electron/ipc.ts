@@ -1,6 +1,7 @@
 import type {
   JournalEvent,
   JournalHeader,
+  JournalEnvironment,
   JournalRaw,
   JournalRr,
   SessionSummary,
@@ -23,6 +24,7 @@ export const IPC = {
   appendEvent: 'testday:append-event',
   appendRaw: 'testday:append-raw',
   appendRr: 'testday:append-rr',
+  appendEnvironment: 'testday:append-environment',
   close: 'testday:close',
   list: 'testday:list',
   read: 'testday:read',
@@ -105,6 +107,7 @@ export interface TestdayBridge {
   appendEvent(event: Omit<JournalEvent, 'type'>): void
   appendRaw(raw: Omit<JournalRaw, 'type'>): void
   appendRr(rr: Omit<JournalRr, 'type'>): void
+  appendEnvironment(reading: Omit<JournalEnvironment, 'type'>): void
   close(endedAt: number): Promise<CloseResult>
 
   list(): Promise<SessionSummary[]>

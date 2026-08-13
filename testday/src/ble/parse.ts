@@ -350,3 +350,32 @@ export function parseCoreTemperature(view: DataView): MetricUpdate {
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
+
+/**
+ * Aranet4 current readings.
+ *
+ * Layout, little endian: CO₂ ppm (uint16), temperature in 0.05 °C steps
+ * (uint16), pressure in 0.1 hPa steps (uint16), humidity percent (uint8),
+ * battery percent (uint8), status (uint8).
+ *
+ * A CO₂ value of 0 is the device saying it has not measured yet, typically in
+ * the first minute after power-on. It is dropped rather than recorded, because
+ * a recorded zero would read as clean air.
+ */
+export function parseAranet(view: DataView): MetricUpdate {
+  const r = new Reader(view)
+  const out: MetricUpdate = {}
+  if (view.byteLength < 9) return out
+
+  const co2 = r.u16()
+  const tempRaw = r.u16()
+  const pressureRaw = r.u16()
+  const humidity = r.u8()
+
+  if (co2 > 0 && co2 < 0xffff) out.co2Ppm = co2
+  if (tempRaw !== 0xffff) out.ambientTempC = tempRaw * 0.05
+  if (pressureRaw !== 0xffff) out.pressureHpa = pressureRaw * 0.1
+  if (humidity <= 100) out.humidityPct = humidity
+
+  return out
+}

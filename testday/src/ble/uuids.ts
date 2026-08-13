@@ -71,3 +71,30 @@ export const FTMS_RESULT: Record<number, string> = {
   0x04: 'operation failed',
   0x05: 'control not permitted',
 }
+
+/**
+ * Aranet4 environment monitor: CO₂, temperature, relative humidity, pressure.
+ *
+ * A vendor service, so full 128-bit UUIDs. Two things about this device decide
+ * how it is used here rather than how it is parsed:
+ *
+ * 1. It measures every 1, 2, 5 or 10 minutes, not every second. It is an
+ *    environment channel, not a metric channel, and carrying it at 1 Hz would
+ *    produce a column of repeats that reads as if it had been measured that
+ *    often.
+ * 2. Recent firmware requires Bluetooth bonding before the readings
+ *    characteristic can be read, and Web Bluetooth cannot drive a passkey
+ *    pairing flow. Whether this device works at all through this app is a
+ *    question about the firmware in front of you, not about this code, and it
+ *    has to be answered on the hardware.
+ */
+export const ARANET_SVC = 'f0cd1400-95da-4f4b-9ac8-aa55d312af0c'
+
+export const ARANET_CHR = {
+  /** Current readings: CO₂, temperature, pressure, humidity, battery. */
+  currentReadings: 'f0cd3001-95da-4f4b-9ac8-aa55d312af0c',
+  /** Seconds between measurements, so the app can say how fresh a reading is. */
+  interval: 'f0cd2002-95da-4f4b-9ac8-aa55d312af0c',
+  /** Seconds since the last measurement. */
+  sinceMeasurement: 'f0cd2004-95da-4f4b-9ac8-aa55d312af0c',
+} as const

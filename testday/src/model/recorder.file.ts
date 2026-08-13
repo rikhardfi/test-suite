@@ -89,6 +89,11 @@ export function createFileRecorder(bridge: TestdayBridge): Recorder {
       queue(() => bridge.appendRr({ at, t, ms: intervalsMs }))
     },
 
+    environment(t: number, reading) {
+      const at = Date.now()
+      queue(() => bridge.appendEnvironment({ ...reading, at, t }))
+    },
+
     async finish(endedAt: number): Promise<FinishResult> {
       const result = await bridge.close(endedAt)
       recording = false

@@ -3,22 +3,9 @@ import { SENSOR_PROFILES, isWebBluetoothAvailable, type SensorManager, type Sens
 import { Simulator } from '../ble/simulator'
 import { BluetoothChooser, useBluetoothChooser } from './BluetoothChooser'
 import { useLiveMetrics, useSensorDevices } from './hooks'
+import { metricLabel } from '../ble/metrics'
 import type { MetricKey } from '../ble/types'
 
-const METRIC_LABELS: Record<MetricKey, string> = {
-  power: 'power',
-  heartRate: 'heart rate',
-  cadence: 'cadence',
-  speedMs: 'speed',
-  distanceM: 'distance',
-  inclinePct: 'incline',
-  resistance: 'resistance',
-  coreTempC: 'core temp',
-  skinTempC: 'skin temp',
-  heatStrainIndex: 'heat strain',
-  coreQuality: 'quality',
-  coreHrmState: 'HRM link',
-}
 
 const SOURCE_METRICS: { key: MetricKey; label: string }[] = [
   { key: 'power', label: 'Power' },
@@ -70,6 +57,32 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
 
   const supported = isWebBluetoothAvailable()
 
+  const captureUnknown = async () => {
+    const uuid = window.prompt(
+      'Service UUID to capture from.\n\n' +
+        'Web Bluetooth will not list services that were not asked for, so the UUID has to ' +
+        'come from the device documentation or from a scanner app. Nothing is decoded: the ' +
+        'raw bytes are recorded so a parser can be written against them afterwards.',
+    )
+    if (!uuid?.trim()) return
+    setError(null)
+    try {
+      await manager.captureUnknown(uuid.trim().toLowerCase())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const downloadTrace = () => {
+    const trace = manager.trace.toTrace(window.prompt('Note for this trace (optional)') ?? undefined)
+    const blob = new Blob([JSON.stringify(trace, null, 2)], { type: 'application/json' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `ble-trace-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+  }
+
   return (
     <div className="modal-backdrop" onClick={close}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -106,6 +119,29 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
           </button>
         </div>
 
+        <h3>Raw capture</h3>
+        <p className="muted small">
+          Records the bytes a sensor sends, without interpreting them. This is how a parser gets
+          written for hardware whose protocol is not published, and how a change to an existing
+          parser gets checked against packets a real device actually sent rather than against
+          synthetic ones.
+        </p>
+        <div className="row">
+          <button
+            className="ghost"
+            onClick={() => (manager.trace.isRecording ? manager.trace.stop() : manager.trace.start())}
+          >
+            {manager.trace.isRecording ? 'Stop capture' : 'Start capture'}
+          </button>
+          <button className="ghost" disabled={!supported} onClick={() => void captureUnknown()}>
+            Capture an unknown device
+          </button>
+          <button className="ghost" disabled={manager.trace.size === 0} onClick={downloadTrace}>
+            Save trace
+          </button>
+          <span className="muted small nowrap">{manager.trace.size} packets</span>
+        </div>
+
         <h3>Connected</h3>
         {devices.length === 0 ? (
           <p className="muted">Nothing paired yet.</p>
@@ -130,7 +166,7 @@ export function SensorPanel({ manager, ftpWatts, onClose }: Props) {
                   <td className="muted small">
                     {device.provides
                       .filter((metric) => manager.sourceFor(metric)?.id === device.id)
-                      .map((metric) => METRIC_LABELS[metric])
+                      .map((metric) => metricLabel(metric))
                       .join(', ') || '—'}
                   </td>
                   <td>{device.batteryPct != null ? `${device.batteryPct}%` : '—'}</td>

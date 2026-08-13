@@ -25,6 +25,7 @@ const bridge: TestdayBridge = {
   appendEvent: (event) => ipcRenderer.send(IPC.appendEvent, event),
   appendRaw: (raw) => ipcRenderer.send(IPC.appendRaw, raw),
   appendRr: (rr) => ipcRenderer.send(IPC.appendRr, rr),
+  appendEnvironment: (reading) => ipcRenderer.send(IPC.appendEnvironment, reading),
   close: (endedAt) => ipcRenderer.invoke(IPC.close, endedAt),
 
   list: () => ipcRenderer.invoke(IPC.list),

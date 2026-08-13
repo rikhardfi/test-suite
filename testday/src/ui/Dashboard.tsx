@@ -26,6 +26,7 @@ interface Props {
   frontTiles: string[]
   onOpenSensors: () => void
   onEditTiles: () => void
+  onEditEnvironment: () => void
   onFinish: () => void
 }
 
@@ -40,6 +41,7 @@ export function Dashboard({
   frontTiles,
   onOpenSensors,
   onEditTiles,
+  onEditEnvironment,
   onFinish,
 }: Props) {
   const snapshot = useRunnerSnapshot(runner)
@@ -278,6 +280,9 @@ export function Dashboard({
 
         <div className="group">
           <RecordingPill status={status} durability={durability} />
+          <button onClick={onEditEnvironment} title="Record the conditions this test was run in">
+            Conditions
+          </button>
           <button onClick={onOpenSensors}>
             Sensors <span className="count">{manager.devices.length}</span>
           </button>

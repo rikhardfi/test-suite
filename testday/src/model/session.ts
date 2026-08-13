@@ -85,6 +85,28 @@ export interface RrEntry {
   ms: number[]
 }
 
+/**
+ * Conditions the test was run in.
+ *
+ * Unrecorded conditions make an airway result uninterpretable afterwards, and
+ * afterwards is when it gets interpreted. Cold, dry or CO₂-loaded indoor air is
+ * a conditioning load on the airway, so it is part of the measurement rather
+ * than context for it. Entered by hand when no monitor is connected, which will
+ * be most sessions.
+ */
+export interface Environment {
+  tempC?: number
+  humidityPct?: number
+  co2Ppm?: number
+  pressureHpa?: number
+  altitudeM?: number
+  setting?: 'indoor' | 'outdoor'
+  note?: string
+  /** Whether these came from a sensor or from the operator. */
+  source: 'sensor' | 'manual' | 'mixed'
+  at: number
+}
+
 /** One thing the operator or a sensor did, kept in the order it happened. */
 export interface SessionEvent {
   kind: string
@@ -110,6 +132,8 @@ export interface SessionRecord {
    * protocol as written the moment anybody touches anything.
    */
   events?: SessionEvent[]
+  /** Conditions, from the environment monitor and from the operator's form. */
+  environment?: Environment[]
   notes?: string
 }
 

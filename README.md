@@ -10,6 +10,7 @@ methods. This file covers the repository: what is here, how to run it, and the f
 easy to get wrong.
 
 ```
+testday.command   double-clickable launcher, see below
 testday/          the application (Electron + React + TypeScript)
 docs/             design notes and the reviewed improvement document
 tasks/            scratch notes, not tracked
@@ -17,11 +18,27 @@ tasks/            scratch notes, not tracked
 
 ## Quick start
 
+Double-click **`testday.command`** in Finder, or from a terminal:
+
+```bash
+./testday.command            # build and run the app
+./testday.command --dev      # hot reload, for working on it
+./testday.command --check    # typecheck and tests, launch nothing
+```
+
+It installs npm dependencies on first run and needs the network once for that
+and never again. It builds before launching rather than hot-reloading, so the
+app is the same every time it starts and a typecheck failure stops it there
+rather than surfacing as a blank window with an athlete already warming up.
+Anything it cannot do, it says in a sentence you can act on.
+
+Working on the code directly instead:
+
 ```bash
 cd testday
 npm install
 python3 -m pip install -r tools/requirements.txt   # dev-only, see "Verifying FIT output"
-npm run electron:dev                                # the desktop app, hot reload
+npm run electron:dev
 ```
 
 No hardware to hand? The sensor panel has a **Simulator**: a synthetic trainer and athlete that
@@ -31,11 +48,11 @@ protocol before an athlete is on the bike.
 
 ## Commands
 
-All of these run from `testday/`.
+The launcher covers the common cases. These run from `testday/` when you want one directly.
 
 | Command | What it does |
 | --- | --- |
-| `npm run electron:dev` | Desktop app with hot reload. **This is the one to use.** |
+| `npm run electron:dev` | Desktop app with hot reload |
 | `npm run electron:start` | Build, then run the built desktop app |
 | `npm run dist` | Package a local `.app` into `release/` |
 | `npm test` | The full suite, including the FIT verification below |

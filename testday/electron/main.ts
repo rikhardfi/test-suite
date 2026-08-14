@@ -17,8 +17,14 @@ import type {
 } from '../src/model/journal'
 import type { LactateEntry, Sample, SessionRecord } from '../src/model/session'
 
-const isDev = !app.isPackaged
-const DEV_URL = process.env.VITE_DEV_SERVER_URL ?? 'http://localhost:5173'
+/**
+ * Dev mode is the presence of a running Vite server, not the absence of a
+ * packaged app: `testday.command` builds into dist/ and then starts an
+ * unpackaged Electron, which must load that build from disk rather than sit
+ * waiting on a dev server nobody started.
+ */
+const DEV_URL = process.env.VITE_DEV_SERVER_URL ?? null
+const isDev = !app.isPackaged && DEV_URL !== null
 
 /** Visible in Finder on purpose: a recording you cannot see is one you cannot check. */
 const ROOT = join(app.getPath('documents'), 'testday')
@@ -363,7 +369,7 @@ function createWindow(): void {
     win = null
   })
 
-  if (isDev) {
+  if (isDev && DEV_URL) {
     void contents.loadURL(DEV_URL)
   } else {
     void win.loadFile(join(__dirname, '..', 'dist', 'index.html'))

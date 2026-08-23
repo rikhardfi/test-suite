@@ -43,6 +43,7 @@ export const METRIC_INFO: Record<MetricKey, MetricInfo> = {
   distanceM: { label: 'Distance', unit: 'm', typicalIntervalS: 1, channel: 'metric' },
   inclinePct: { label: 'Gradient', unit: '%', typicalIntervalS: 1, channel: 'metric' },
   resistance: { label: 'Resistance', unit: '', typicalIntervalS: 1, channel: 'metric' },
+  pedalBalancePct: { label: 'Pedal balance (left)', unit: '%', typicalIntervalS: 1, channel: 'metric' },
   coreTempC: { label: 'Core temperature', unit: '°C', typicalIntervalS: 2, channel: 'metric' },
   skinTempC: { label: 'Skin temperature', unit: '°C', typicalIntervalS: 2, channel: 'metric' },
   heatStrainIndex: { label: 'Heat strain index', unit: '', typicalIntervalS: 2, channel: 'metric' },

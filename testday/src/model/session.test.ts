@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TestRunner, lapsFromSamples } from './session'
 import { DEFAULT_ATHLETE, buildStepTest, makeProtocol, type Protocol } from './protocol'
 import { computeVo2 } from './vo2'
+import { PowerMatch } from './powermatch'
 import type { MachineControl, MetricUpdate } from '../ble/types'
 
 /** Records every target the runner pushes, so ERG behaviour is observable. */
@@ -67,6 +68,118 @@ describe('TestRunner', () => {
     })
     return { runner, machine, protocol }
   }
+
+  /**
+   * The correction under the runner, rather than on its own.
+   *
+   * These assert the division of labour that makes a corrected session
+   * readable: the machine is commanded the corrected figure, and the record
+   * keeps the protocol's own number.
+   */
+  describe('with a power correction', () => {
+    const correcting = (options: { referenceRatio: number; multiplier: number }) => {
+      const machine = recordingMachine()
+      const match = new PowerMatch()
+      match.calibrate(options.multiplier, 0)
+      const protocol = makeProtocol('Test', 'bike', [
+        { id: 's1', durationS: 600, target: { mode: 'watts', watts: 200 } },
+      ])
+      const runner = new TestRunner({
+        protocol,
+        athlete: { ...DEFAULT_ATHLETE, ftpWatts: 300 },
+        // The trainer holds its own reading at whatever it was told; the meter
+        // on the pedals reads that much higher.
+        readMetrics: () => {
+          const commanded = machine.powerCommands[machine.powerCommands.length - 1] ?? 0
+          return { power: commanded * options.referenceRatio, powerSecondaryW: commanded }
+        },
+        machine: () => machine.control,
+        powerMatch: match,
+        now: () => Date.now(),
+      })
+      return { runner, machine, match }
+    }
+
+    it('commands the corrected figure and records the protocol target', async () => {
+      const { runner, machine } = correcting({ referenceRatio: 1.049, multiplier: 1 / 1.049 })
+      runner.start()
+      await advance(5)
+
+      // 200 W asked for at the pedals, 191 W commanded to the trainer.
+      expect(machine.powerCommands[0]).toBe(191)
+      const sample = runner.recordedSamples[runner.recordedSamples.length - 1]
+      expect(sample.targetPower).toBe(200)
+      expect(sample.commandedPower).toBe(191)
+      expect(sample.powerMatchFactor).toBeCloseTo(0.9533, 3)
+      // Which is the point of the whole exercise: the athlete is at 200 W.
+      expect(sample.power).toBeCloseTo(200, 0)
+    })
+
+    it('records both power traces without blending them', async () => {
+      const { runner } = correcting({ referenceRatio: 1.05, multiplier: 1 })
+      runner.start()
+      await advance(5)
+      const sample = runner.recordedSamples[runner.recordedSamples.length - 1]
+      expect(sample.power).toBeCloseTo(210, 0)
+      expect(sample.powerSecondaryW).toBe(200)
+    })
+
+    it('puts every move the loop makes into the journal', async () => {
+      const machine = recordingMachine()
+      const match = new PowerMatch()
+      const events: { kind: string; data?: Record<string, unknown> }[] = []
+      const protocol = makeProtocol('Test', 'bike', [
+        { id: 's1', durationS: 600, target: { mode: 'watts', watts: 200 } },
+      ])
+      const runner = new TestRunner({
+        protocol,
+        athlete: { ...DEFAULT_ATHLETE, ftpWatts: 300 },
+        // Ten percent under target, and staying there.
+        readMetrics: () => ({ power: 180, powerSecondaryW: 200 }),
+        machine: () => machine.control,
+        powerMatch: match,
+        onEvent: (kind, data) => events.push({ kind, data }),
+        now: () => Date.now(),
+      })
+
+      runner.start()
+      await advance(40)
+      const trims = events.filter((e) => e.kind === 'powerMatchTrim')
+      expect(trims).toHaveLength(1)
+      expect(trims[0].data?.referenceMeanW).toBe(180)
+      expect(trims[0].data?.targetW).toBe(200)
+      expect(machine.powerCommands[machine.powerCommands.length - 1]).toBe(204)
+    })
+
+    it('holds the correction and flags the samples when the meter drops out', async () => {
+      const machine = recordingMachine()
+      const match = new PowerMatch()
+      match.calibrate(0.95, 0)
+      let meterAlive = true
+      const protocol = makeProtocol('Test', 'bike', [
+        { id: 's1', durationS: 600, target: { mode: 'watts', watts: 200 } },
+      ])
+      const runner = new TestRunner({
+        protocol,
+        athlete: { ...DEFAULT_ATHLETE, ftpWatts: 300 },
+        readMetrics: () => (meterAlive ? { power: 200, powerSecondaryW: 190 } : { powerSecondaryW: 190 }),
+        machine: () => machine.control,
+        powerMatch: match,
+        now: () => Date.now(),
+      })
+
+      runner.start()
+      await advance(5)
+      meterAlive = false
+      await advance(20)
+
+      const sample = runner.recordedSamples[runner.recordedSamples.length - 1]
+      expect(sample.powerMatchHeld).toBe(true)
+      // Held, not reverted: the commanded figure has not moved.
+      expect(sample.commandedPower).toBe(190)
+      expect(new Set(machine.powerCommands)).toEqual(new Set([190]))
+    })
+  })
 
   it('starts idle and reports the first step target', () => {
     const { runner } = build()
@@ -360,6 +473,22 @@ describe('what the runner records beyond the obvious', () => {
     vi.useRealTimers()
   })
 
+  /** A treadmill whose readings change from one sample to the next. */
+  const runMoving = async (readMetrics: () => MetricUpdate, seconds = 5) => {
+    const protocol = makeProtocol('Run', 'run', [
+      { id: 'step_1', durationS: 60, target: { mode: 'speed', kph: 12 } },
+    ])
+    const runner = new TestRunner({
+      protocol,
+      athlete: DEFAULT_ATHLETE,
+      readMetrics,
+      now: () => Date.now(),
+    })
+    runner.start()
+    await advance(seconds)
+    return [...runner.recordedSamples]
+  }
+
   const runTreadmill = async (metrics: MetricUpdate, inclinePct = 2) => {
     const protocol = makeProtocol('Run', 'run', [
       {
@@ -400,8 +529,39 @@ describe('what the runner records beyond the obvious', () => {
 
   it('prefers the machine odometer over integrating speed', async () => {
     const samples = await runTreadmill({ speedMs: 3, distanceM: 500 })
-    expect(samples[0].distanceM).toBe(500)
     expect(samples[0].distanceIntegrated).toBeUndefined()
+  })
+
+  /**
+   * The belt is nearly always already rolling when a test starts, so the
+   * treadmill's odometer arrives with a warm-up on it. Reported as it stands it
+   * put 0.1 km on the dashboard at 0:00, and 0.1 km into the exported FIT.
+   */
+  it('starts the distance at zero however far the machine has already run', async () => {
+    let odometer = 92
+    const samples = await runMoving(() => ({ speedMs: 3, distanceM: (odometer += 3) }))
+    expect(samples[0].distanceM).toBe(0)
+    expect(samples[1].distanceM).toBeCloseTo(3, 1)
+    expect(samples[2].distanceM).toBeCloseTo(6, 1)
+  })
+
+  /**
+   * Zeroing the machine mid-test must not take the session's distance with it.
+   * The odometer is a difference from where it was, and the difference simply
+   * re-anchors.
+   */
+  it('carries the distance on when the machine odometer is zeroed mid-test', async () => {
+    let odometer = 500
+    const samples = await runMoving(() => {
+      // Zeroed on the third reading, then counting up again from nothing.
+      odometer = odometer >= 506 ? 0 : odometer + 3
+      return { speedMs: 3, distanceM: odometer }
+    })
+    const distances = samples.map((s) => s.distanceM!)
+    expect(distances[0]).toBe(0)
+    for (let i = 1; i < distances.length; i++) {
+      expect(distances[i]).toBeGreaterThanOrEqual(distances[i - 1])
+    }
   })
 
   it('integrates distance when the machine reports none, and flags it', async () => {

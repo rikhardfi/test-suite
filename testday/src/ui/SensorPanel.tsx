@@ -6,6 +6,7 @@ import { useLiveMetrics, useSensorDevices } from './hooks'
 import { metricLabel } from '../ble/metrics'
 import type { MetricKey } from '../ble/types'
 import { Modal } from './Modal'
+import { describeProbe, type TrainerResponse } from '../ble/probe'
 
 
 const SOURCE_METRICS: { key: MetricKey; label: string }[] = [
@@ -21,6 +22,12 @@ interface Props {
   /** How many sensors were paired last time, so the offer can name a number. */
   rememberedCount: number
   onReconnectRemembered: () => void
+  /** Last ERG probe, or null if none has been run on this machine today. */
+  probe: TrainerResponse | null
+  probing: boolean
+  onProbe: () => void
+  correcting: boolean
+  onCorrectingChange: (enabled: boolean) => void
   onClose: () => void
 }
 
@@ -29,6 +36,11 @@ export function SensorPanel({
   ftpWatts,
   rememberedCount,
   onReconnectRemembered,
+  probe,
+  probing,
+  onProbe,
+  correcting,
+  onCorrectingChange,
   onClose,
 }: Props) {
   const devices = useSensorDevices(manager)
@@ -58,10 +70,17 @@ export function SensorPanel({
     onClose()
   }
 
-  const addSimulator = () => {
+  const addSimulator = (withMeter: boolean) => {
     if (devices.some((d) => d.id === 'sim:trainer')) return
-    const simulator = new Simulator(manager, { ftpWatts })
+    const simulator = new Simulator(manager, {
+      ftpWatts,
+      // The paired-meter variant reproduces a measured failure rather than an
+      // invented one, so the correction can be watched doing its job with no
+      // hardware in the room.
+      referenceMeter: withMeter ? {} : undefined,
+    })
     manager.addVirtual(simulator)
+    simulator.attachReferenceMeter()
     void simulator.start()
   }
 
@@ -133,9 +152,13 @@ export function SensorPanel({
               <span>{profile.hint}</span>
             </button>
           ))}
-          <button className="dashed" onClick={addSimulator}>
+          <button className="dashed" onClick={() => addSimulator(false)}>
             <strong>Simulator</strong>
             <span>Fake trainer and athlete, no hardware</span>
+          </button>
+          <button className="dashed" onClick={() => addSimulator(true)}>
+            <strong>Simulator + power meter</strong>
+            <span>Two power sources that disagree and drift, as a real pair does</span>
           </button>
         </div>
 
@@ -242,6 +265,15 @@ export function SensorPanel({
           </>
         )}
 
+        <PowerSourcesSection
+          manager={manager}
+          probe={probe}
+          probing={probing}
+          onProbe={onProbe}
+          correcting={correcting}
+          onCorrectingChange={onCorrectingChange}
+        />
+
         <h3>Live</h3>
         <div className="live-strip">
           <span>{metrics.power != null ? `${Math.round(metrics.power)} W` : '— W'}</span>
@@ -256,5 +288,82 @@ export function SensorPanel({
           </button>
         </div>
     </Modal>
+  )
+}
+
+/**
+ * Which device is being trusted, which is being corrected, and by how much.
+ *
+ * A trainer in ERG holds its own measurement at the commanded number, which is
+ * not the same quantity as the power going through the pedals, and the gap
+ * between them moves as the unit warms. Pairing a second meter is what makes
+ * that visible; the probe is what measures it; the switch is what acts on it.
+ *
+ * The switch is off by default and the panel says why. With one power source
+ * there is nothing to correct against, and a correction driven by a meter
+ * nobody has checked simply imposes that meter's error on the athlete.
+ */
+function PowerSourcesSection({
+  manager,
+  probe,
+  probing,
+  onProbe,
+  correcting,
+  onCorrectingChange,
+}: {
+  manager: SensorManager
+  probe: TrainerResponse | null
+  probing: boolean
+  onProbe: () => void
+  correcting: boolean
+  onCorrectingChange: (enabled: boolean) => void
+}) {
+  const pair = manager.powerPair()
+  const machine = manager.machine
+  if (!pair.reference && !machine) return null
+
+  return (
+    <>
+      <h3>Power sources</h3>
+      <div className="source-roles">
+        <p className="small">
+          Reported and corrected against:{' '}
+          <strong>{pair.reference?.name ?? 'nothing reporting'}</strong>
+        </p>
+        <p className="small">
+          Machine's own reading:{' '}
+          <strong>{pair.machine?.name ?? 'not separately reported'}</strong>
+        </p>
+        {!pair.machine && machine && (
+          <p className="muted small">
+            Only one device is reporting power, so the trainer is being compared with itself. Pair a
+            power meter to see what the athlete is actually producing.
+          </p>
+        )}
+      </div>
+
+      <div className="row">
+        <button className="ghost" disabled={!machine || probing} onClick={onProbe}>
+          {probing ? 'Probing…' : 'Probe ERG (30 s)'}
+        </button>
+        <label className="check small">
+          <input
+            type="checkbox"
+            checked={correcting}
+            disabled={!pair.machine}
+            onChange={(e) => onCorrectingChange(e.target.checked)}
+          />
+          Command the trainer so the meter reads the target
+        </label>
+      </div>
+
+      {probe && (
+        <p className={`small ${probe.ok ? 'muted' : 'banner error'}`}>{describeProbe(probe)}</p>
+      )}
+      <p className="muted small">
+        The athlete has to be pedalling steadily for the probe to mean anything. It commands 100 W
+        then 180 W and measures what arrives, so run it in the warm-up rather than at the start line.
+      </p>
+    </>
   )
 }

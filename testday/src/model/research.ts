@@ -27,7 +27,7 @@ import type { JournalEvent, JournalRecord } from './journal'
  */
 
 /** Bumped when a column is appended. Never on a rename, because there are none. */
-export const RESEARCH_EXPORT_VERSION = 1
+export const RESEARCH_EXPORT_VERSION = 2
 
 export interface ColumnSpec {
   name: string
@@ -48,7 +48,13 @@ export const SAMPLE_COLUMNS: readonly ColumnSpec[] = [
   { name: 'step_index', unit: '', description: 'Zero-based protocol step', from: 'stepIndex' },
   { name: 'phase', unit: '', description: 'work or break', from: 'phase' },
   { name: 'power_w', unit: 'W', description: 'Measured mechanical power', from: 'power' },
-  { name: 'target_power_w', unit: 'W', description: 'Power commanded to the trainer', from: 'targetPower' },
+  {
+    name: 'target_power_w',
+    unit: 'W',
+    description:
+      'Power the protocol asked the athlete for. Where a power correction was running this is NOT what the trainer was told to do; see commanded_power_w',
+    from: 'targetPower',
+  },
   { name: 'heart_rate_bpm', unit: 'bpm', description: 'Heart rate', from: 'heartRate' },
   { name: 'cadence_rpm', unit: 'rpm or spm', description: 'Pedal or step rate, by sport', from: 'cadence' },
   { name: 'speed_ms', unit: 'm/s', description: 'Measured speed', from: 'speedMs' },
@@ -89,6 +95,32 @@ export const SAMPLE_COLUMNS: readonly ColumnSpec[] = [
     unit: '',
     description: '0 unsupported, 1 supported but not receiving, 2 receiving',
     from: 'coreHrmState',
+  },
+  {
+    name: 'power_secondary_w',
+    unit: 'W',
+    description:
+      "Controllable machine's own power, recorded when a separate reference meter supplied power_w. Never blended into power_w",
+    from: 'powerSecondaryW',
+  },
+  {
+    name: 'commanded_power_w',
+    unit: 'W',
+    description:
+      'What the machine was actually told to do, where a correction made that differ from target_power_w. Blank means the raw target was commanded',
+    from: 'commandedPower',
+  },
+  {
+    name: 'power_match_factor',
+    unit: '',
+    description: 'Correction in force: commanded_power_w = target_power_w x this. Blank means none',
+    from: 'powerMatchFactor',
+  },
+  {
+    name: 'power_match_held',
+    unit: '',
+    description:
+      '1 when the reference meter was not reporting and the last known correction was held. The step is uncorrected in that stretch',
   },
 ]
 

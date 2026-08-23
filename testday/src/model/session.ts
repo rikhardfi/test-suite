@@ -11,6 +11,7 @@ import {
   type Step,
 } from './protocol'
 import { max, mean, normalizedPower } from './metrics'
+import type { PowerMatch, PowerMatchState } from './powermatch'
 import { estimateVo2, type Vo2Method } from './vo2'
 import type { MachineControl, MetricUpdate } from '../ble/types'
 
@@ -46,6 +47,26 @@ export interface Sample {
   targetPower?: number
   targetKph?: number
   targetInclinePct?: number
+  /**
+   * The controllable machine's own power, when a separate meter supplied
+   * `power`. Never blended into it: the difference between the two is the
+   * measurement, not noise to be averaged away.
+   */
+  powerSecondaryW?: number
+  /**
+   * What was actually commanded to the machine, when that differs from
+   * `targetPower`.
+   *
+   * `targetPower` stays the protocol's number, which is what the athlete is
+   * meant to be producing. This is what the trainer was told to do in order to
+   * make that true at the pedals, and keeping the two apart is the whole reason
+   * a corrected session can still be read afterwards.
+   */
+  commandedPower?: number
+  /** Correction in force: commanded = targetPower x this. */
+  powerMatchFactor?: number
+  /** Set when the reference meter was missing and the last factor was held. */
+  powerMatchHeld?: true
   /**
    * Estimated oxygen cost, mL/kg/min, with the equation that produced it. An
    * estimate exported without its method is indistinguishable from a
@@ -174,6 +195,10 @@ export interface RunnerSnapshot {
   intensityPct: number
   targetPower: number | null
   targetKph: number | null
+  /** What the machine was last told, when a correction is changing it. */
+  commandedPower: number | null
+  powerMatchFactor: number | null
+  powerMatchState: PowerMatchState | null
   step: Step | null
   totalS: number
   controlError: string | null
@@ -185,6 +210,11 @@ export interface RunnerOptions {
   /** Live metric source, polled once per recorded sample. */
   readMetrics: () => MetricUpdate
   machine?: () => MachineControl | null
+  /**
+   * The power correction, when one is running. Absent means the raw protocol
+   * target is commanded, which is what every session before this did.
+   */
+  powerMatch?: PowerMatch
   now?: () => number
   /** Fired when the test first starts, before any sample exists. */
   onStart?: (startedAt: number) => void
@@ -205,7 +235,32 @@ export interface RunnerOptions {
 }
 
 /** Operator actions worth putting in the journal. */
-export type RunnerEventKind = 'start' | 'pause' | 'resume' | 'jump' | 'intensity'
+export type RunnerEventKind =
+  | 'start'
+  | 'pause'
+  | 'resume'
+  | 'jump'
+  | 'intensity'
+  /**
+   * The power correction, in full. A closed loop that cannot be reconstructed
+   * afterwards has no business driving an athlete, so every calibration, every
+   * trim, every time the clamp bit and every stretch spent holding a factor
+   * without a reference meter goes into the journal as it happens.
+   */
+  | 'powerMatchCalibrated'
+  | 'powerMatchTrim'
+  | 'powerMatchClamped'
+  | 'powerMatchHold'
+  | 'powerMatchResume'
+
+/** Journal kinds for what the correction reports about itself. */
+const POWER_MATCH_EVENTS = {
+  calibrated: 'powerMatchCalibrated',
+  trim: 'powerMatchTrim',
+  clamped: 'powerMatchClamped',
+  hold: 'powerMatchHold',
+  resume: 'powerMatchResume',
+} as const satisfies Record<string, RunnerEventKind>
 
 const TICK_MS = 200
 const SAMPLE_INTERVAL_S = 1
@@ -225,6 +280,7 @@ export class TestRunner {
   private readonly athlete: Athlete
   private readonly readMetrics: () => MetricUpdate
   private readonly machine: () => MachineControl | null
+  private readonly powerMatch?: PowerMatch
   private readonly now: () => number
   private readonly onStart?: (startedAt: number) => void
   private readonly onSample?: (sample: Sample) => void
@@ -251,6 +307,17 @@ export class TestRunner {
   private startedAt = 0
   /** Fallback odometer, used only when the machine reports no distance. */
   private integratedDistanceM = 0
+  /**
+   * What the machine's own odometer read when this session's distance was zero.
+   *
+   * A treadmill is usually already rolling when a test starts — the athlete
+   * steps on to a moving belt — so its odometer arrives with a warm-up already
+   * on it. Subtracting where it started is what makes the session's distance
+   * the distance of the session. Null until the machine has reported once.
+   */
+  private machineOriginM: number | null = null
+  /** The last distance reported from the machine, after the origin is removed. */
+  private machineDistanceM = 0
 
   private listeners = new Set<() => void>()
 
@@ -259,6 +326,7 @@ export class TestRunner {
     this.athlete = options.athlete
     this.readMetrics = options.readMetrics
     this.machine = options.machine ?? (() => null)
+    this.powerMatch = options.powerMatch
     this.now = options.now ?? (() => Date.now())
     this.onStart = options.onStart
     this.onSample = options.onSample
@@ -347,8 +415,13 @@ export class TestRunner {
     this.elapsedS = last.t
     this.nextSampleAt = last.t + SAMPLE_INTERVAL_S
     // Pick the odometer up where it stopped, so a resumed session does not
-    // restart its distance at zero halfway through.
+    // restart its distance at zero halfway through. The machine's origin is
+    // left unset: the next reading re-anchors against this figure, which is
+    // what makes a resume survive the machine having been stopped, zeroed or
+    // swapped in between.
     this.integratedDistanceM = last.distanceM ?? 0
+    this.machineDistanceM = last.distanceM ?? 0
+    this.machineOriginM = null
 
     // Walk the protocol to find which step that elapsed time lands in.
     let remaining = this.elapsedS
@@ -496,9 +569,21 @@ export class TestRunner {
     // that is the number on the display in front of the athlete. Integrating
     // speed is the fallback, and it is flagged, because the two drift apart
     // over a long test and afterwards nobody can tell which they are reading.
+    //
+    // The odometer is read as a difference from where it stood at the start,
+    // never as an absolute. Anchoring on the first reading covers the warm-up
+    // already on the belt; re-anchoring when it goes backwards covers the
+    // machine being zeroed mid-test, and keeps the session's distance running
+    // on from where it was rather than dropping back to nothing.
     this.integratedDistanceM += (metrics.speedMs ?? 0) * SAMPLE_INTERVAL_S
-    const machineDistance = metrics.distanceM
-    const integrated = machineDistance == null
+    const reported = metrics.distanceM
+    const integrated = reported == null
+    if (reported != null) {
+      if (this.machineOriginM == null || reported < this.machineOriginM) {
+        this.machineOriginM = reported - this.machineDistanceM
+      }
+      this.machineDistanceM = Number((reported - this.machineOriginM).toFixed(1))
+    }
 
     // A treadmill that reports its gradient is believed. One that does not is
     // assumed to be at the gradient it was commanded to, which is true whenever
@@ -507,6 +592,33 @@ export class TestRunner {
     const commandedIncline = step ? stepInclinePct(step) : null
     const measuredIncline = metrics.inclinePct
     const inclinePct = measuredIncline ?? commandedIncline ?? undefined
+
+    // The correction sees the reference meter and the protocol's target, and
+    // decides on its own clock whether anything is steady enough to act on.
+    // Called before the sample is built so the sample carries the state that
+    // was in force for it rather than the state a second later.
+    const targetPower = step ? this.targetPower : null
+    if (this.powerMatch) {
+      this.powerMatch.observe({
+        t,
+        targetW: targetPower,
+        referenceW: metrics.power,
+        stepIndex: this.stepIndex,
+        stepDurationS: step?.durationS ?? 0,
+        onBreak: this.phase === 'break',
+      })
+      for (const event of this.powerMatch.drain()) {
+        this.onEvent?.(POWER_MATCH_EVENTS[event.kind], {
+          ...event.data,
+          t: Number(event.t.toFixed(1)),
+          factor: Number(event.factor.toFixed(4)),
+        })
+      }
+    }
+
+    const factor = this.powerMatch?.factor ?? 1
+    const commanded =
+      targetPower != null && factor !== 1 ? Math.round(targetPower * factor) : null
 
     const speedKph = metrics.speedMs == null ? undefined : metrics.speedMs * 3.6
     const estimate = estimateVo2(
@@ -525,12 +637,19 @@ export class TestRunner {
       speedMs: metrics.speedMs,
       inclinePct,
       inclineFromTarget: inclinePct != null && measuredIncline == null ? true : undefined,
-      distanceM: machineDistance ?? Number(this.integratedDistanceM.toFixed(1)),
+      distanceM: integrated ? Number(this.integratedDistanceM.toFixed(1)) : this.machineDistanceM,
       distanceIntegrated: integrated ? true : undefined,
       resistance: metrics.resistance,
-      targetPower: step ? this.targetPower ?? undefined : undefined,
+      targetPower: targetPower ?? undefined,
       targetKph: step ? this.targetKph ?? undefined : undefined,
       targetInclinePct: commandedIncline ?? undefined,
+      // Both traces, and the arithmetic between them, so that a reader a year
+      // from now can see what the athlete produced, what the machine thought,
+      // what it was told, and why those three differ.
+      powerSecondaryW: metrics.powerSecondaryW,
+      commandedPower: commanded ?? undefined,
+      powerMatchFactor: factor === 1 ? undefined : Number(factor.toFixed(4)),
+      powerMatchHeld: this.powerMatch?.isHolding ? true : undefined,
       vo2Est: estimate ? Number(estimate.vo2.toFixed(2)) : undefined,
       vo2Method: estimate?.method,
       // Recorded exactly as reported, quality included. Judging a reading is
@@ -573,7 +692,11 @@ export class TestRunner {
     }
 
     if (watts != null && control.canSetPower) {
-      const rounded = Math.round(watts)
+      // The machine is commanded the corrected figure; the protocol's own
+      // number is what gets recorded and reported. Correcting the record
+      // instead of the command would make the file agree with itself and
+      // disagree with the athlete.
+      const rounded = Math.round(this.powerMatch ? this.powerMatch.command(watts) : watts)
       if (this.lastSentWatts === null || Math.abs(rounded - this.lastSentWatts) >= POWER_EPSILON_W) {
         this.lastSentWatts = rounded
         void send(() => control.setTargetPower(rounded))
@@ -653,6 +776,9 @@ export class TestRunner {
       intensityPct: Math.round(this.intensity * 100),
       targetPower: this.targetPower,
       targetKph: this.targetKph,
+      commandedPower: this.lastSentWatts,
+      powerMatchFactor: this.powerMatch ? this.powerMatch.factor : null,
+      powerMatchState: this.powerMatch?.currentState ?? null,
       step,
       totalS: this.protocol.steps.reduce((sum, s) => sum + stepTotalS(s), 0),
       controlError: this.controlError,

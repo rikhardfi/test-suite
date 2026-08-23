@@ -5,7 +5,7 @@ export interface CurveSeries {
   label: string
   color: string
   dashed?: boolean
-  points: { durationS: number; watts: number }[]
+  points: { durationS: number; value: number }[]
 }
 
 const PAD = { top: 10, right: 10, bottom: 22, left: 40 }
@@ -20,10 +20,23 @@ const TICKS: [number, string][] = [
 ]
 
 /**
- * Mean-maximal power against duration on a logarithmic time axis — the shape
+ * A mean-maximal curve against duration on a logarithmic time axis — the shape
  * that makes a 5 s sprint and a 20 min effort comparable on one plot.
+ *
+ * Unit-agnostic on purpose: it plots watts for a bike and flat-equivalent speed
+ * for a treadmill, and neither is more the chart's business than the other.
  */
-export function MmpCurve({ series }: { series: CurveSeries[] }) {
+export function DurationCurve({
+  series,
+  decimals = 0,
+  minTop = 100,
+}: {
+  series: CurveSeries[]
+  /** Decimals on the value axis. Speed needs one; watts do not. */
+  decimals?: number
+  /** Floor for the top of the value axis, so an empty chart still has a scale. */
+  minTop?: number
+}) {
   const ref = useCanvas(
     (ctx, width, height) => {
       const plotW = width - PAD.left - PAD.right
@@ -31,18 +44,18 @@ export function MmpCurve({ series }: { series: CurveSeries[] }) {
       if (plotW <= 0 || plotH <= 0) return
 
       const all = series.flatMap((s) => s.points)
-      const maxWatts = Math.max(100, ...all.map((p) => p.watts)) * 1.1
+      const maxValue = Math.max(minTop, ...all.map((p) => p.value)) * 1.1
       const minS = 1
       const maxS = 7200
 
       const x = (d: number) =>
         PAD.left + ((Math.log(Math.max(minS, d)) - Math.log(minS)) / (Math.log(maxS) - Math.log(minS))) * plotW
-      const y = (w: number) => PAD.top + plotH - (w / maxWatts) * plotH
+      const y = (v: number) => PAD.top + plotH - (v / maxValue) * plotH
 
       ctx.font = `9px ${FONT.mono}`
       ctx.strokeStyle = COLORS.grid
       ctx.lineWidth = 1
-      for (const tick of niceTicks(0, maxWatts, 4)) {
+      for (const tick of niceTicks(0, maxValue, 4)) {
         const py = Math.round(y(tick)) + 0.5
         ctx.beginPath()
         ctx.moveTo(PAD.left, py)
@@ -50,7 +63,7 @@ export function MmpCurve({ series }: { series: CurveSeries[] }) {
         ctx.stroke()
         ctx.fillStyle = COLORS.axis
         ctx.textAlign = 'right'
-        ctx.fillText(tick.toFixed(0), PAD.left - 5, py + 3)
+        ctx.fillText(tick.toFixed(decimals), PAD.left - 5, py + 3)
       }
 
       ctx.textAlign = 'center'
@@ -76,7 +89,7 @@ export function MmpCurve({ series }: { series: CurveSeries[] }) {
           .sort((a, b) => a.durationS - b.durationS)
           .forEach((point, index) => {
             const px = x(point.durationS)
-            const py = y(point.watts)
+            const py = y(point.value)
             if (index === 0) ctx.moveTo(px, py)
             else ctx.lineTo(px, py)
           })
@@ -84,7 +97,7 @@ export function MmpCurve({ series }: { series: CurveSeries[] }) {
       }
       ctx.setLineDash([])
     },
-    [series],
+    [series, decimals, minTop],
   )
 
   return (

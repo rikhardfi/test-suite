@@ -22,6 +22,12 @@ sampling break — an easy spin at the end of the stage during which the dashboa
 lactate value. Global intensity trim (±1%), step skip, pause, and a lap table you can double-click to
 jump around in.
 
+**Two power sources, and a trainer that is told what to do about them.** Pair a power meter as well
+as the trainer and both traces are recorded side by side, never blended, with the bias and drift
+between them live on the dashboard. Optionally the trainer is then commanded a corrected figure so
+that the *meter* reads the protocol's target: a multiplier measured by a thirty-second probe in the
+warm-up, plus a slow trim inside long steps. See [Which watts](#which-watts).
+
 **Capture.** One sample per second of power, heart rate, cadence, speed and the commanded target,
 tagged with the step and phase it belongs to. In the desktop app every sample is appended to a file
 and flushed to disk as it happens, so a crash costs nothing and an interrupted session is offered
@@ -77,6 +83,10 @@ with a realistic first-order lag, produces pedalling noise, and drives a heart r
 drifts upward above threshold. Works in any browser, including ones without Web Bluetooth. Use it to
 rehearse a protocol before the athlete is on the bike.
 
+**Simulator + power meter** adds a second power source that disagrees with the trainer and drifts
+against it, reproducing a measured session rather than an invented one. It is the way to watch the
+power correction below do its job with no hardware in the room.
+
 ## Recordings
 
 The desktop app records to an **append-only journal**: one JSON object per line, `fsync`ed before the
@@ -98,8 +108,19 @@ write returns. Nothing is ever rewritten, so the worst a crash can do is cut the
   copy is verified by size and SHA-256, re-read from the destination, before the app claims two copies
   exist.
 - **Nothing is deleted.** Removing a session from the list moves it to `~/Documents/testday/discarded/`.
+- **Protocols and settings are files too**, `protocols.json` and `preferences.json` in the same folder,
+  each keeping one generation as `.bak`. They used to live in the renderer's IndexedDB and
+  localStorage, which are scoped to the origin of the page: a development window is
+  `http://localhost:5173` and the built app is `file://`, so running the app the other way silently
+  swapped in an empty store and looked exactly like every protocol having been deleted. Whatever is
+  still in a browser store is collected into the files once, per origin, on first launch.
 - **A failed write turns the dashboard pill red immediately.** A silent write failure is worse than a
   crash, because the operator carries on testing into nothing.
+- **A machine left running with nothing recording raises an alarm** across the top of the dashboard,
+  with a button that stops it. A belt still moving after Finish & save, or before anyone has pressed
+  start, is the one genuinely dangerous state this app can be in, and a paused dashboard looks calm.
+- **Distance is measured from the start of the session, not from the machine's odometer.** A treadmill
+  is usually already rolling when the athlete steps on, so its odometer arrives with a warm-up on it.
 
 ### What this does and does not survive
 
@@ -176,7 +197,7 @@ src/
     analysis.ts    Polynomial fitting, threshold methods, critical power, W-prime, decoupling
     ventilatory.ts Cart import, V-slope VT1 and VE/VCO2 VT2
     longitudinal.ts One athlete across test days, with the bands carried through
-    storage.ts     IndexedDB for sessions and protocols
+    storage.ts     Protocols and settings: files on desktop, IndexedDB in a browser
     export.ts      CSV and JSON writers
     fit.ts         FIT encoder, including the developer fields TCX had nowhere for
     research.ts    Frozen CSV column contract, metadata sidecar, participant codes
@@ -224,6 +245,42 @@ dependencies beyond React, and still makes no network requests.
 
 **Re-run this whenever a message or field number in `src/model/fit.ts` changes.** The unit tests
 will not catch that class of mistake.
+
+## Which watts
+
+A trainer in ERG mode holds *its own* measurement at the commanded number. That is not the same
+quantity as the power going through the pedals, and the gap between them is neither small nor
+constant. In a 50 minute session recorded here at a commanded 200 W, a reference meter read 4.9%
+high at the start and 0.7% low at the end: about 12 W of real load left the test while every label
+in the file still said 200 W. A drivetrain loss of one and a half to three percent is physics and
+stays put. The rest was the trainer's own estimate climbing as the unit warmed, which in ERG means
+quietly giving the athlete less work to do.
+
+A step test's premise is a known work rate, so this is a measurement failure rather than a display
+problem. Pairing a second power source is what makes it visible; one trace cannot show its own
+error. Turning on the correction is what acts on it, and it works in two parts:
+
+- A **feed-forward multiplier**, measured against the reference meter by the *Probe ERG* button
+  during the warm-up. Applied to every commanded target from its first second, so a 60 second ramp
+  step is right immediately. It cannot oscillate.
+- A **slow trim** inside steps longer than two minutes, to catch drift. Rate-limited to 2% per
+  adjustment, no more than one every 30 seconds, with a 1% dead band and a hard 15% clamp. The
+  trainer is already running a control loop of its own, and two loops that fight replace a steady
+  offset with a hunting one, which is worse for a test than the offset was.
+
+Three things to know before switching it on. The loop cannot tell a drifting trainer from a drifting
+meter, so it will faithfully impose the reference meter's own error on the athlete: zero the meter
+first, and do not use a single-sided one, which reports a constant 50/50 balance and is doubling one
+leg. The dead band means the loop settles to within about 1% of target rather than exactly on it, on
+purpose. And **pedal power is not hub power**: a 200 W crank test and a 200 W hub test are different
+tests, so the reported figure names which meter produced it. Published ergometry is overwhelmingly
+crank-based, which is the argument for closing the loop on the pedals rather than the flywheel.
+
+Everything the loop does is recorded: the protocol's target and the commanded value in separate
+columns, the factor in force, both power traces, and a journal entry for the probe, every trim,
+every time the clamp bit, and every stretch spent holding a factor because the meter stopped
+answering. `target_power_w` remains what the protocol asked the athlete for; `commanded_power_w` is
+what the trainer was told to do.
 
 ## Notes on the numbers
 

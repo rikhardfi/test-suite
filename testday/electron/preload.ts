@@ -37,6 +37,10 @@ const bridge: TestdayBridge = {
   importSessions: (sessions) => ipcRenderer.invoke(IPC.importSessions, sessions),
   reveal: (id) => ipcRenderer.invoke(IPC.reveal, id),
 
+  library: () => ipcRenderer.invoke(IPC.library),
+  saveProtocols: (protocols) => ipcRenderer.invoke(IPC.saveProtocols, protocols),
+  savePreferences: (preferences) => ipcRenderer.invoke(IPC.savePreferences, preferences),
+
   onWriteStatus: (listener) => {
     const handler = (_event: unknown, status: Parameters<typeof listener>[0]) => listener(status)
     ipcRenderer.on(IPC.writeStatus, handler)

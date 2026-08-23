@@ -7,6 +7,7 @@ import type {
   SessionSummary,
 } from '../src/model/journal'
 import type { LactateEntry, Sample, SessionRecord } from '../src/model/session'
+import type { Protocol } from '../src/model/protocol'
 
 /**
  * The contract between the recording process and the interface. Both sides
@@ -34,6 +35,9 @@ export const IPC = {
   amendLactate: 'testday:amend-lactate',
   importSessions: 'testday:import-sessions',
   reveal: 'testday:reveal',
+  library: 'testday:library',
+  saveProtocols: 'testday:save-protocols',
+  savePreferences: 'testday:save-preferences',
   // Pushed from the recorder to the interface.
   writeStatus: 'testday:write-status',
   bluetoothDevices: 'testday:bluetooth-devices',
@@ -48,6 +52,18 @@ export interface StoragePaths {
   logFile: string
   /** Confirming a quit mid-recording is not configurable; this covers the rest. */
   confirmQuitWhenIdle: boolean
+}
+
+/**
+ * Everything the interface keeps between runs, other than the recordings.
+ * Stored as files by the recording process rather than in the renderer, whose
+ * storage is scoped to an origin that differs between the built app and a
+ * development window.
+ */
+export interface LibraryContents {
+  protocols: Protocol[]
+  /** The renderer's settings object, or null before it has ever been saved. */
+  preferences: Record<string, unknown> | null
 }
 
 export interface BeginResult {
@@ -118,6 +134,11 @@ export interface TestdayBridge {
   amendLactate(sessionId: string, entry: LactateEntry): Promise<SessionRecord | null>
   importSessions(sessions: SessionRecord[]): Promise<number>
   reveal(id: string | null): Promise<void>
+
+  library(): Promise<LibraryContents>
+  /** The whole list, every time: it is small, and a partial write is worse. */
+  saveProtocols(protocols: Protocol[]): Promise<void>
+  savePreferences(preferences: Record<string, unknown>): Promise<void>
 
   onWriteStatus(listener: (status: WriteStatus) => void): () => void
   onBluetoothDevices(listener: (devices: BluetoothDeviceInfo[]) => void): () => void

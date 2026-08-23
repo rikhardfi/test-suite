@@ -124,7 +124,11 @@ export function parseCyclingPower(
   const flags = r.u16()
   const out: MetricUpdate = { power: r.i16() }
 
-  if (bit(flags, 0)) r.skip(1) // pedal power balance
+  // Pedal power balance, in halves of a percent. Read rather than skipped: a
+  // meter that measures one leg and doubles it reports exactly 50 forever, and
+  // that is the only thing BLE will say about whether a power figure rests on
+  // one leg or two.
+  if (bit(flags, 0)) out.pedalBalancePct = r.u8() / 2
   if (bit(flags, 2)) r.skip(2) // accumulated torque
   if (bit(flags, 4)) {
     const revs = r.u32()

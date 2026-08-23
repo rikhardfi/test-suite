@@ -129,6 +129,8 @@ const KIND_PRIORITY: Record<MetricKey, DeviceKind[]> = {
   distanceM: ['treadmill', 'runningPod', 'trainer', 'speedCadence', 'mock'],
   inclinePct: ['treadmill', 'trainer', 'mock'],
   resistance: ['trainer', 'treadmill', 'mock'],
+  // Only a real power meter reports this; a trainer's estimate has no sides.
+  pedalBalancePct: ['powerMeter', 'mock'],
   coreTempC: ['coreTemp', 'mock'],
   skinTempC: ['coreTemp', 'mock'],
   heatStrainIndex: ['coreTemp', 'mock'],
@@ -385,6 +387,12 @@ export class SensorManager {
     const hrEntry = this.sourceFor('heartRate', now)
     const rr = hrEntry ? this.entries.get(hrEntry.id)?.rrIntervalsMs : undefined
     if (rr?.length) out.rrIntervalsMs = rr
+
+    // Both power traces, kept apart. Absent when only one device is reporting,
+    // which is the honest state rather than a column of repeats.
+    const machinePower = this.powerPair(now).machine
+    if (machinePower) out.powerSecondaryW = machinePower.watts
+
     return out
   }
 
@@ -401,6 +409,52 @@ export class SensorManager {
       if (entry.at >= cutoff) out.push(...entry.ms)
     }
     return out
+  }
+
+  /**
+   * The two power sources, told apart by the job each is doing.
+   *
+   * `reference` is whichever device won `power` under the arbitration above,
+   * which already prefers a real power meter over a trainer's own estimate.
+   * `machine` is the controllable device's own reading, and it is only reported
+   * when it is a *different* device: a trainer compared with itself agrees
+   * perfectly and says nothing.
+   *
+   * This split is what the whole correction rests on. One power trace cannot
+   * show its own error, and the error is not a constant — a trainer's estimate
+   * climbs as the unit warms, which in ERG means the athlete is quietly given
+   * less work while every label still says the target.
+   */
+  powerPair(now = Date.now()): {
+    reference: { id: string; name: string; watts: number } | null
+    machine: { id: string; name: string; watts: number } | null
+  } {
+    const referenceDevice = this.sourceFor('power', now)
+    const reference = referenceDevice
+      ? this.reading(referenceDevice, 'power', now)
+      : null
+
+    let machine: { id: string; name: string; watts: number } | null = null
+    for (const entry of this.entries.values()) {
+      if (!entry.device.control) continue
+      if (referenceDevice && entry.device.id === referenceDevice.id) continue
+      const held = this.reading(entry.device, 'power', now)
+      if (held) {
+        machine = held
+        break
+      }
+    }
+    return { reference, machine }
+  }
+
+  private reading(
+    device: SensorDevice,
+    metric: MetricKey,
+    now: number,
+  ): { id: string; name: string; watts: number } | null {
+    const held = this.entries.get(device.id)?.values.get(metric)
+    if (!held || now - held.at >= staleAfterMs(metric)) return null
+    return { id: device.id, name: device.name, watts: held.value }
   }
 
   /** The controllable machine, if one is connected. */

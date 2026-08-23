@@ -57,15 +57,76 @@ export async function listSessions(): Promise<SessionRecord[]> {
   return all.sort((a, b) => b.startedAt - a.startedAt)
 }
 
-export const saveProtocol = (protocol: Protocol): Promise<unknown> =>
-  tx(STORE_PROTOCOLS, 'readwrite', (s) => s.put(protocol))
+/**
+ * Protocols.
+ *
+ * In the desktop app they are files, held by the recording process. In a
+ * browser there is nowhere else to put them, so IndexedDB it is — with the
+ * caveat that IndexedDB belongs to the page's origin, and a protocol written
+ * there is only ever one cleared cache away from gone.
+ */
+const desktop = (): NonNullable<Window['testday']> | null =>
+  typeof window === 'undefined' ? null : (window.testday ?? null)
 
-export const deleteProtocol = (id: string): Promise<unknown> =>
-  tx(STORE_PROTOCOLS, 'readwrite', (s) => s.delete(id))
+/** The desktop store is a whole-file read and write, so the list is held here. */
+let protocolCache: Protocol[] | null = null
+
+async function currentProtocols(): Promise<Protocol[]> {
+  const bridge = desktop()
+  if (!bridge) return tx<Protocol[]>(STORE_PROTOCOLS, 'readonly', (s) => s.getAll())
+  protocolCache ??= (await bridge.library()).protocols
+  return protocolCache
+}
+
+async function writeProtocols(protocols: Protocol[]): Promise<void> {
+  const bridge = desktop()
+  if (!bridge) return
+  protocolCache = protocols
+  await bridge.saveProtocols(protocols)
+}
+
+export async function saveProtocol(protocol: Protocol): Promise<unknown> {
+  const bridge = desktop()
+  if (!bridge) return tx(STORE_PROTOCOLS, 'readwrite', (s) => s.put(protocol))
+  const rest = (await currentProtocols()).filter((p) => p.id !== protocol.id)
+  await writeProtocols([...rest, protocol])
+  return undefined
+}
+
+export async function deleteProtocol(id: string): Promise<unknown> {
+  const bridge = desktop()
+  if (!bridge) return tx(STORE_PROTOCOLS, 'readwrite', (s) => s.delete(id))
+  await writeProtocols((await currentProtocols()).filter((p) => p.id !== id))
+  return undefined
+}
 
 export async function listProtocols(): Promise<Protocol[]> {
-  const all = await tx<Protocol[]>(STORE_PROTOCOLS, 'readonly', (s) => s.getAll())
-  return all.sort((a, b) => b.updatedAt - a.updatedAt)
+  const all = await currentProtocols()
+  return [...all].sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/**
+ * Moves protocols written before this machine kept them as files, once.
+ *
+ * Called for a given origin exactly once, because it is a merge and not a sync:
+ * running it again would resurrect anything deleted since. Anything already
+ * held by id is left alone, so a protocol edited in the desktop app is never
+ * overwritten by the older copy the browser store still has.
+ */
+export async function importLegacyProtocols(): Promise<number> {
+  const bridge = desktop()
+  if (!bridge) return 0
+  let legacy: Protocol[]
+  try {
+    legacy = await tx<Protocol[]>(STORE_PROTOCOLS, 'readonly', (s) => s.getAll())
+  } catch {
+    return 0
+  }
+  const held = await currentProtocols()
+  const missing = legacy.filter((p) => p.id && !held.some((existing) => existing.id === p.id))
+  if (missing.length === 0) return 0
+  await writeProtocols([...held, ...missing])
+  return missing.length
 }
 
 export interface Settings {
@@ -84,6 +145,15 @@ export interface Settings {
    */
   dashboardTiles?: { bike?: string[]; run?: string[] }
   /**
+   * Where the dashboard's two dividers sit, per sport. A step test is read off
+   * the lap table and a ramp off the tiles, so the same split does not suit
+   * both, and neither is worth setting again every test day.
+   */
+  dashboardLayout?: {
+    bike?: { colsPct: number; rowsPct: number }
+    run?: { colsPct: number; rowsPct: number }
+  }
+  /**
    * Sensors paired on this machine and which metric each was assigned to.
    * Re-deciding this at the start of every test day is the kind of setup that
    * gets skipped once and then yields a trace from the wrong device.
@@ -92,6 +162,16 @@ export interface Settings {
     known?: { id: string; name: string; profileKey: string }[]
     preferred?: Record<string, string>
   }
+  /**
+   * Whether the trainer is commanded the raw protocol target or a figure
+   * corrected so the reference power meter reads it.
+   *
+   * Off by default, and deliberately so: with one power source there is nothing
+   * to correct against, and a correction driven by a meter nobody has checked
+   * imposes that meter's error on the athlete. Turning it on is a statement
+   * that the reference is worth believing.
+   */
+  powerMatch?: { enabled: boolean }
 }
 
 /** Made once per machine, on first use, and then left alone. */
@@ -103,21 +183,47 @@ export function ensureParticipantSalt(settings: Settings): Settings {
   return { ...settings, participantSalt: salt }
 }
 
-/** Settings are small and needed synchronously at boot, so they live in localStorage. */
+const merge = (fallback: Settings, parsed: Partial<Settings>): Settings => ({
+  ...fallback,
+  ...parsed,
+  athlete: { ...fallback.athlete, ...parsed.athlete },
+})
+
+/**
+ * Settings are needed synchronously at boot, so localStorage is read first and
+ * the desktop copy is merged in a moment later by `loadStoredSettings`. The
+ * localStorage copy is per-origin and therefore not to be trusted as the only
+ * one: it is a cache, and the file is the record.
+ */
 export function loadSettings(fallback: Settings): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (!raw) return fallback
-    const parsed = JSON.parse(raw) as Partial<Settings>
-    return {
-      ...fallback,
-      ...parsed,
-      athlete: { ...fallback.athlete, ...parsed.athlete },
-    }
+    return merge(fallback, JSON.parse(raw) as Partial<Settings>)
   } catch {
     return fallback
   }
 }
+
+/**
+ * The desktop copy, or null when there is none. Returned as it was stored
+ * rather than merged with a fallback, so that a setting the file does not
+ * mention leaves whatever booted alone instead of reverting to a default.
+ */
+export async function loadStoredSettings(): Promise<Partial<Settings> | null> {
+  const bridge = desktop()
+  if (!bridge) return null
+  try {
+    const { preferences } = await bridge.library()
+    return (preferences as Partial<Settings> | null) ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Layers a stored copy over what is in hand, athlete fields included. */
+export const applySettings = (current: Settings, stored: Partial<Settings>): Settings =>
+  merge(current, stored)
 
 export function saveSettings(settings: Settings): void {
   try {
@@ -125,4 +231,7 @@ export function saveSettings(settings: Settings): void {
   } catch {
     // Private browsing or a full quota; settings simply do not persist.
   }
+  // Fire and forget: nothing in the interface waits on it, and a failure to
+  // write preferences must never be allowed to interrupt a test.
+  void desktop()?.savePreferences(settings as unknown as Record<string, unknown>)
 }

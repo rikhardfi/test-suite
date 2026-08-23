@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { LactateChart } from './LactateChart'
-import { MmpCurve } from './MmpCurve'
+import { DurationCurve } from './DurationCurve'
 import { COLORS } from './theme'
 import { formatClock, mmpCurve, normalizedPower, paceFromSpeed } from '../model/metrics'
 import { analyseLactateWithBands, criticalPower, type LactatePoint } from '../model/analysis'
@@ -378,7 +378,15 @@ function SessionDetail({
           <div className="panel-head">
             <span className="muted">Mean-maximal power</span>
           </div>
-          <MmpCurve series={[{ label: 'This session', color: COLORS.power, points: curve }]} />
+          <DurationCurve
+            series={[
+              {
+                label: 'This session',
+                color: COLORS.power,
+                points: curve.map((p) => ({ durationS: p.durationS, value: p.watts })),
+              },
+            ]}
+          />
           <dl className="stats">
             <div>
               <dt>Critical power</dt>

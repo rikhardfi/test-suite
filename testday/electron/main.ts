@@ -1,4 +1,14 @@
-import { BrowserWindow, app, dialog, ipcMain, powerSaveBlocker, session, shell } from 'electron'
+import {
+  BrowserWindow,
+  Menu,
+  app,
+  dialog,
+  ipcMain,
+  powerSaveBlocker,
+  session,
+  shell,
+  type MenuItemConstructorOptions,
+} from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -6,6 +16,7 @@ import { JournalWriter } from './journal'
 import { DiagnosticsLog, describeError } from './log'
 import { PendingAppends } from './pending'
 import { SessionStore, isClosed, type OpenSession } from './sessions'
+import { Library } from './library'
 import { IPC, type CloseResult, type StoragePaths, type WriteStatus } from './ipc'
 import type {
   JournalEvent,
@@ -16,6 +27,7 @@ import type {
   JournalRr,
 } from '../src/model/journal'
 import type { LactateEntry, Sample, SessionRecord } from '../src/model/session'
+import type { Protocol } from '../src/model/protocol'
 
 /**
  * Dev mode is the presence of a running Vite server, not the absence of a
@@ -39,11 +51,22 @@ interface MainSettings {
    * always confirms and that is not configurable.
    */
   confirmQuitWhenIdle: boolean
+  /**
+   * Interface scale. Remembered per machine, because it is a property of the
+   * screen it is being read on: a laptop on a treadmill's cup holder and a
+   * monitor across the lab want different answers.
+   */
+  zoomFactor: number
 }
+
+const MIN_ZOOM = 0.6
+const MAX_ZOOM = 2.5
 
 const log = new DiagnosticsLog(LOG_DIR)
 let store: SessionStore
-let settings: MainSettings = { mirrorDir: null, confirmQuitWhenIdle: true }
+/** Protocols and interface preferences, which outlive any single recording. */
+let library: Library
+let settings: MainSettings = { mirrorDir: null, confirmQuitWhenIdle: true, zoomFactor: 1 }
 let win: BrowserWindow | null = null
 
 /** The session currently being recorded, if any. At most one at a time. */
@@ -55,12 +78,32 @@ let bluetoothCallback: ((deviceId: string) => void) | null = null
 
 // --- settings ---------------------------------------------------------------
 
+const clampZoom = (factor: unknown): number =>
+  typeof factor === 'number' && Number.isFinite(factor)
+    ? Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, factor))
+    : 1
+
+/**
+ * Scales the whole interface, and remembers it.
+ *
+ * The dashboard is read from wherever the operator is standing, which is often
+ * not in front of the laptop, and the numbers are the point of the screen. This
+ * is the one control that makes them bigger without anything having to be
+ * hidden to make room.
+ */
+function applyZoom(factor: number): void {
+  settings.zoomFactor = clampZoom(factor)
+  win?.webContents.setZoomFactor(settings.zoomFactor)
+  saveSettings()
+}
+
 function loadSettings(): MainSettings {
   try {
     const parsed = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')) as Partial<MainSettings>
     return {
       mirrorDir: typeof parsed.mirrorDir === 'string' ? parsed.mirrorDir : null,
       confirmQuitWhenIdle: parsed.confirmQuitWhenIdle !== false,
+      zoomFactor: clampZoom(parsed.zoomFactor),
     }
   } catch {
     // No settings yet. Offer the OneDrive folder only if OneDrive is actually
@@ -70,6 +113,7 @@ function loadSettings(): MainSettings {
     return {
       mirrorDir: existsSync(parent) ? DEFAULT_MIRROR : null,
       confirmQuitWhenIdle: true,
+      zoomFactor: 1,
     }
   }
 }
@@ -306,6 +350,39 @@ function confirmLeaving(source: 'quit' | 'close'): boolean {
 
 // --- window -----------------------------------------------------------------
 
+/**
+ * The application menu.
+ *
+ * Built rather than left to Electron's default for one reason: the zoom items
+ * have to persist what they set, and the default ones do not. Reload is
+ * deliberately absent — a reload mid-test throws away the dashboard's state,
+ * and there is nothing on this screen worth the risk of a mistyped ⌘R. The
+ * journal survives regardless, and a restart resumes from it.
+ */
+function buildMenu(): void {
+  const zoomBy = (delta: number) => () => applyZoom(settings.zoomFactor + delta)
+  const template: MenuItemConstructorOptions[] = [
+    ...(process.platform === 'darwin' ? ([{ role: 'appMenu' }] as MenuItemConstructorOptions[]) : []),
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    {
+      label: 'View',
+      submenu: [
+        { label: 'Bigger', accelerator: 'CommandOrControl+Plus', click: zoomBy(0.1) },
+        // The same key without shift, which is what fingers actually press.
+        { label: 'Bigger', accelerator: 'CommandOrControl+=', click: zoomBy(0.1), visible: false },
+        { label: 'Smaller', accelerator: 'CommandOrControl+-', click: zoomBy(-0.1) },
+        { label: 'Actual size', accelerator: 'CommandOrControl+0', click: () => applyZoom(1) },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+        { role: 'toggleDevTools' },
+      ],
+    },
+    { role: 'windowMenu' },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1440,
@@ -323,6 +400,14 @@ function createWindow(): void {
   })
 
   const contents = win.webContents
+
+  // The scale the operator left it at, applied before anything is painted.
+  contents.on('did-finish-load', () => contents.setZoomFactor(settings.zoomFactor))
+  // Pinch and ctrl-scroll go through the same setting, so the menu and the
+  // trackpad cannot end up disagreeing about how big the interface is.
+  contents.on('zoom-changed', (_event, direction) => {
+    applyZoom(settings.zoomFactor + (direction === 'in' ? 0.1 : -0.1))
+  })
 
   // Electron ships no Bluetooth chooser. Without preventDefault here the first
   // device found is picked silently; without a callback at all, requestDevice
@@ -556,6 +641,20 @@ function registerHandlers(): void {
     if (dir) await shell.openPath(dir)
   })
 
+  ipcMain.handle(IPC.library, () => ({
+    protocols: library.readProtocols(),
+    preferences: library.readPreferences(),
+  }))
+
+  ipcMain.handle(IPC.saveProtocols, (_event, protocols: Protocol[]) => {
+    library.writeProtocols(protocols)
+    log.info('protocols saved', { count: protocols.length })
+  })
+
+  ipcMain.handle(IPC.savePreferences, (_event, preferences: Record<string, unknown>) => {
+    library.writePreferences(preferences)
+  })
+
   ipcMain.on(IPC.selectBluetooth, (_event, deviceId: string) => {
     const callback = bluetoothCallback
     bluetoothCallback = null
@@ -615,7 +714,9 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     settings = loadSettings()
     store = new SessionStore(ROOT)
+    library = new Library(ROOT)
     saveSettings()
+    buildMenu()
     log.info('app started', { version: app.getVersion(), platform: process.platform })
     blockNetwork()
     registerHandlers()

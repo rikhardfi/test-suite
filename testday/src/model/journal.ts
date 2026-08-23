@@ -53,6 +53,24 @@ export type JournalEventKind =
   | 'resumedFromDisk'
   /** A metric changed hands between devices, or started or stopped arriving. */
   | 'sourceChanged'
+  /**
+   * The power correction, start to finish: the multiplier the warm-up probe
+   * measured, every trim the slow loop applied, every time the clamp refused to
+   * go further, and every stretch the loop spent holding a factor because the
+   * reference meter had stopped answering.
+   */
+  | 'powerMatchCalibrated'
+  | 'powerMatchTrim'
+  | 'powerMatchClamped'
+  | 'powerMatchHold'
+  | 'powerMatchResume'
+  /**
+   * Which device is supplying the reported power and which is being corrected,
+   * plus anything doubtful about the reference meter. Written once at the start
+   * of a session, because "warn, do not block" is only a real decision if the
+   * warning outlives the screen it appeared on.
+   */
+  | 'powerSources'
 
 export interface JournalEvent {
   type: 'event'

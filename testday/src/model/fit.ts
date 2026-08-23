@@ -320,6 +320,15 @@ const DEV_FIELDS: readonly DevField[] = [
   { num: 12, name: 'blood_lactate', units: 'mmol/L', type: BASE.float32, on: 'lap' },
   { num: 13, name: 'rpe_borg', units: '', type: BASE.uint8, on: 'lap' },
   { num: 14, name: 'step_target', units: '', type: BASE.string, on: 'lap' },
+  // Both power traces and the arithmetic between them. A reader who has never
+  // heard of this app gets the athlete's power in the standard `power` field
+  // and everything that qualifies it here, rather than a corrected number
+  // presented as if it had been measured.
+  { num: 15, name: 'power_secondary', units: 'watts', type: BASE.uint16, on: 'record' },
+  { num: 16, name: 'commanded_power', units: 'watts', type: BASE.uint16, on: 'record' },
+  { num: 17, name: 'power_match_factor', units: '', type: BASE.float32, on: 'record' },
+  // 1 while the reference meter was missing and the last factor was held.
+  { num: 18, name: 'power_match_held', units: '', type: BASE.uint8, on: 'record' },
 ]
 
 /** Strings need a fixed width in a definition message. */
@@ -788,6 +797,11 @@ function isFieldUsed(field: DevField, session: SessionRecord, laps?: readonly La
   // an explicit 0 or 1.
   if (field.num === 10) return session.samples.some((sample) => sample.inclinePct != null)
   if (field.num === 11) return session.samples.some((sample) => sample.distanceM != null)
+  // Same reasoning as those two: the hold flag is only ever set when true, so
+  // it is declared whenever a correction was running at all and written as an
+  // explicit 0 or 1. Otherwise "not held" and "not recorded" look identical.
+  if (field.num === 18)
+    return session.samples.some((sample) => sample.powerMatchFactor != null)
 
   const key = RECORD_DEV_KEYS[field.num]
   if (!key) return false
@@ -808,6 +822,10 @@ const RECORD_DEV_KEYS: Record<number, keyof Sample | undefined> = {
   9: 'resistance',
   10: 'inclineFromTarget',
   11: 'distanceIntegrated',
+  15: 'powerSecondaryW',
+  16: 'commandedPower',
+  17: 'powerMatchFactor',
+  18: 'powerMatchHeld',
 }
 
 function recordDevValues(sample: Sample, fields: readonly DevField[]): FieldValues {
@@ -819,7 +837,8 @@ function recordDevValues(sample: Sample, fields: readonly DevField[]): FieldValu
     // The two flags are booleans on the sample and a 0/1 in the file, because
     // FIT has no boolean and an absent flag has to mean "no" rather than
     // "unknown" for a field that is only ever set when true.
-    if (field.num === 10 || field.num === 11) values[field.num] = value === true ? 1 : 0
+    if (field.num === 10 || field.num === 11 || field.num === 18)
+      values[field.num] = value === true ? 1 : 0
     else if (typeof value === 'string') values[field.num] = value
     else if (typeof value === 'number') values[field.num] = value
   }

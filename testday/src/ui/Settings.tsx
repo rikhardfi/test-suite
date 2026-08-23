@@ -99,8 +99,9 @@ export function Settings({ settings, onChange, onResetAthlete }: Props) {
       <section className="panel pad">
         <h2>Data</h2>
         <p className="muted small">
-          Sessions, protocols and settings stay in this browser — IndexedDB for recordings, localStorage for
-          settings. Nothing is uploaded anywhere. Export from the Analysis tab before clearing site data.
+          {window.testday
+            ? 'Recordings, protocols and these settings are files in the testday folder. They survive an update, a rebuild and a reinstall, and can be copied to another machine. Nothing is uploaded anywhere.'
+            : 'This is the browser build, so sessions, protocols and settings stay inside this browser and clearing site data removes them. Export from the Analysis tab first.'}
         </p>
       </section>
 
@@ -122,7 +123,18 @@ export function Settings({ settings, onChange, onResetAthlete }: Props) {
           <li>
             <kbd>L</kbd> enter a lactate value
           </li>
+          <li>
+            <kbd>F</kbd> flip the tile grid
+          </li>
+          <li>
+            <kbd>⌘</kbd> <kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd> scale the interface, remembered
+            for this machine
+          </li>
         </ul>
+        <p className="muted small">
+          The dashboard's two dividers can be dragged, and each sport remembers where they were left.
+          Double-click the upright one to put both back.
+        </p>
       </section>
     </div>
   )

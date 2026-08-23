@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ErrorBoundary } from './ErrorBoundary'
 import { WorkoutGraph } from './WorkoutGraph'
-import { MmpCurve, type CurveSeries } from './MmpCurve'
+import { DurationCurve, type CurveSeries } from './DurationCurve'
+import { Nomogram } from './Nomogram'
 import { LapTable } from './LapTable'
 import { COLORS } from './theme'
 import { useHotkeys, useLiveMetrics, useRunnerSnapshot } from './hooks'
@@ -9,16 +10,35 @@ import { defaultFrontFor, tileByKey, tilesForSport, type TileContext, type TileT
 import { formatClock, formatCountdown, mmpCurve } from '../model/metrics'
 import { criticalPower } from '../model/analysis'
 import { planPowerSeries, stepLabel, type Athlete, type Protocol } from '../model/protocol'
-import { lapsFromSamples, type TestRunner } from '../model/session'
+import { lapsFromSamples, type RunnerSnapshot, type TestRunner } from '../model/session'
+import { speedCurve } from '../model/running'
+import { NO_MOTION, machineIsMoving, watchMotion, type MotionWatch } from '../model/motion'
+import { agreementFromSamples, type PowerAgreement } from '../model/powermatch'
 import type { RecorderStatus } from '../model/recorder'
 import type { SensorManager } from '../ble/manager'
 import { Modal } from './Modal'
+
+/** Where the two dashboard dividers sit, as a percentage of the grid. */
+export interface PanelSplit {
+  colsPct: number
+  rowsPct: number
+}
+
+export const DEFAULT_SPLIT: PanelSplit = { colsPct: 74, rowsPct: 40 }
+
+const clampSplit = (split: PanelSplit): PanelSplit => ({
+  colsPct: Math.min(88, Math.max(35, split.colsPct)),
+  rowsPct: Math.min(75, Math.max(15, split.rowsPct)),
+})
 
 interface Props {
   runner: TestRunner
   protocol: Protocol
   athlete: Athlete
   manager: SensorManager
+  /** Remembered divider positions for this sport. */
+  layout?: PanelSplit
+  onLayoutChange: (split: PanelSplit) => void
   bestCurve?: { durationS: number; watts: number }[]
   status: RecorderStatus
   /** How this build stores a recording, said plainly. */
@@ -36,6 +56,8 @@ export function Dashboard({
   protocol,
   athlete,
   manager,
+  layout,
+  onLayoutChange,
   bestCurve,
   status,
   durability,
@@ -86,24 +108,131 @@ export function Dashboard({
     )
   }, [snapshot.phase, snapshot.stepIndex, snapshot.step])
 
+  /**
+   * The machine left running with nothing being recorded. Polled on its own
+   * timer rather than off the metric stream, so that a sensor which stops
+   * sending — a treadmill whose last message said "3 m/s" and then went quiet —
+   * still resolves one way or the other instead of leaving the alarm latched.
+   */
+  const [motion, setMotion] = useState<MotionWatch>(NO_MOTION)
+  const recording = snapshot.state === 'running'
+  useEffect(() => {
+    const tick = () =>
+      setMotion((previous) =>
+        watchMotion(previous, {
+          moving: machineIsMoving(protocol.sport, manager.read()),
+          recording,
+          nowMs: Date.now(),
+        }),
+      )
+    tick()
+    const timer = setInterval(tick, 500)
+    return () => clearInterval(timer)
+  }, [manager, protocol.sport, recording])
+
   const samples = runner.recordedSamples
+  /**
+   * How the two power sources are getting on, recomputed as samples arrive.
+   *
+   * Derived from the record rather than accumulated in state, so it reads the
+   * same on a session resumed from disk as it did while it was being run.
+   */
+  const agreement = useMemo(() => agreementFromSamples(samples), [samples.length])
   const laps = useMemo(
     () => lapsFromSamples(samples, protocol, athlete, runner.lactateEntries),
     [samples.length, protocol, athlete, runner, runner.lactateEntries.length],
   )
 
   const curves = useMemo<CurveSeries[]>(() => {
-    const live = mmpCurve(samples.map((s) => s.power ?? 0))
-    const plan = mmpCurve(planPowerSeries(protocol, athlete.ftpWatts))
+    const asValues = (points: { durationS: number; watts: number }[]) =>
+      points.map((p) => ({ durationS: p.durationS, value: p.watts }))
     const series: CurveSeries[] = [
-      { label: 'Plan', color: COLORS.planLine, dashed: true, points: plan },
-      { label: 'Live', color: COLORS.power, points: live },
+      {
+        label: 'Plan',
+        color: COLORS.planLine,
+        dashed: true,
+        points: asValues(mmpCurve(planPowerSeries(protocol, athlete.ftpWatts))),
+      },
+      {
+        label: 'Live',
+        color: COLORS.power,
+        points: asValues(mmpCurve(samples.map((s) => s.power ?? 0))),
+      },
     ]
     if (bestCurve?.length) {
-      series.unshift({ label: 'Best', color: COLORS.muted, points: bestCurve })
+      series.unshift({ label: 'Best', color: COLORS.muted, points: asValues(bestCurve) })
     }
     return series
   }, [samples.length, protocol, athlete.ftpWatts, bestCurve])
+
+  /** The running counterpart: best sustained flat-equivalent speed by duration. */
+  const runCurves = useMemo<CurveSeries[]>(
+    () => [
+      {
+        label: 'Live',
+        color: COLORS.power,
+        points: speedCurve(samples, athlete.economyPct ?? 100).map((p) => ({
+          durationS: p.durationS,
+          value: p.kph,
+        })),
+      },
+    ],
+    [samples.length, athlete.economyPct],
+  )
+
+  /**
+   * Which chart the second panel shows. A mean-maximal *power* curve on a
+   * treadmill is a curve of zeroes, so a run gets the two charts that mean
+   * something there instead, and the choice is remembered while the app runs.
+   */
+  const [runView, setRunView] = useState<'nomogram' | 'speed'>('nomogram')
+
+  const dashRef = useRef<HTMLDivElement>(null)
+  const [split, setSplit] = useState<PanelSplit>(layout ?? DEFAULT_SPLIT)
+  const [dragging, setDragging] = useState<'cols' | 'rows' | null>(null)
+  const splitRef = useRef(split)
+  splitRef.current = split
+
+  // Adopt a remembered layout when the sport changes under us.
+  useEffect(() => {
+    setSplit(layout ?? DEFAULT_SPLIT)
+  }, [layout])
+
+  /**
+   * Dragging works in deltas rather than absolute positions, so the divider
+   * stays under the pointer whatever else is above it in the grid.
+   */
+  const startDrag = (axis: 'cols' | 'rows') => (event: React.PointerEvent) => {
+    const box = dashRef.current?.getBoundingClientRect()
+    if (!box) return
+    event.preventDefault()
+    const from = splitRef.current
+    const startX = event.clientX
+    const startY = event.clientY
+    setDragging(axis)
+
+    const move = (e: PointerEvent) => {
+      const deltaPct =
+        axis === 'cols'
+          ? ((e.clientX - startX) / box.width) * 100
+          : ((e.clientY - startY) / box.height) * 100
+      const next = clampSplit(
+        axis === 'cols'
+          ? { ...from, colsPct: from.colsPct + deltaPct }
+          : { ...from, rowsPct: from.rowsPct + deltaPct },
+      )
+      setSplit(next)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setDragging(null)
+      // Written once, at the end, rather than on every pixel of the drag.
+      onLayoutChange(splitRef.current)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
   // Fitted from what the athlete has done before. Without a usable fit the
   // W′ tile hides itself rather than showing a confident meaningless number.
@@ -123,10 +252,14 @@ export function Dashboard({
   }
 
   /**
-   * The front face shows what the operator chose; the back shows everything the
-   * app can currently compute. A tile with nothing to say is dropped rather
-   * than rendered as a dash, because a grid of dashes trains people to stop
-   * reading the grid.
+   * The front face shows what the operator chose; the back shows every tile the
+   * sport has.
+   *
+   * A tile with nothing to say keeps its place and shows a dash, dimmed. The
+   * grid used to drop it, which made the layout rearrange itself as sensors
+   * came and went and left nothing on screen at all before anything was
+   * connected: the one moment the operator wants to check that the dashboard
+   * is set up the way the test needs it.
    */
   const visibleTiles = useMemo(() => {
     const available = tilesForSport(protocol.sport)
@@ -142,9 +275,6 @@ export function Dashboard({
       .filter((tile): tile is NonNullable<typeof tile> => !!tile)
       .filter((tile) => !tile.sport || tile.sport === protocol.sport)
       .map((tile) => ({ tile, value: tile.compute(tileContext) }))
-      .filter((entry): entry is { tile: typeof entry.tile; value: NonNullable<typeof entry.value> } =>
-        entry.value !== null,
-      )
     // Recomputed on every metric tick and every recorded sample.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [face, frontTiles, protocol.sport, metrics, snapshot, samples.length, cp, rr, athlete])
@@ -152,7 +282,51 @@ export function Dashboard({
   const running = snapshot.state === 'running'
 
   return (
-    <div className="dashboard">
+    <>
+      {motion.alarming && (
+        <MotionAlarm
+          sport={protocol.sport}
+          state={snapshot.state}
+          onStop={() => void manager.machine?.control?.stop()}
+          canStop={!!manager.machine?.control}
+          onStart={() => runner.toggle()}
+        />
+      )}
+      <div
+        ref={dashRef}
+        className={`dashboard ${dragging ? 'splitting' : ''}`}
+        style={
+          {
+            '--dash-cols': split.colsPct,
+            '--dash-rows': split.rowsPct,
+          } as React.CSSProperties
+        }
+      >
+      <div
+        className={`split split-v ${dragging === 'cols' ? 'dragging' : ''}`}
+        onPointerDown={startDrag('cols')}
+        onDoubleClick={() => {
+          setSplit(DEFAULT_SPLIT)
+          onLayoutChange(DEFAULT_SPLIT)
+        }}
+        role="separator"
+        aria-orientation="vertical"
+        title="Drag to resize. Double-click to reset."
+      />
+      <div
+        className={`split split-h ${dragging === 'rows' ? 'dragging' : ''}`}
+        onPointerDown={startDrag('rows')}
+        role="separator"
+        aria-orientation="horizontal"
+        title="Drag to resize"
+      />
+      <div
+        className={`split split-h-right ${dragging === 'rows' ? 'dragging' : ''}`}
+        onPointerDown={startDrag('rows')}
+        role="separator"
+        aria-orientation="horizontal"
+        title="Drag to resize"
+      />
       <header className="dash-head">
         <div className="brand">testday</div>
         <div className="who">
@@ -169,6 +343,8 @@ export function Dashboard({
           <button onClick={onOpenSensors}>Sensors</button>
         </div>
       )}
+
+      <PowerSources snapshot={snapshot} agreement={agreement} manager={manager} />
 
       <section className="tile-face">
         <div className="face-head">
@@ -194,17 +370,18 @@ export function Dashboard({
             <Tile
               key={tile.key}
               label={tile.label}
-              value={value.value}
-              unit={value.unit}
-              note={value.note}
+              value={value ? value.value : '—'}
+              unit={value?.unit}
+              note={value?.note}
               tone={tile.tone}
               wide={face === 'front' && tile.wide}
-              suspect={value.suspect}
+              suspect={value?.suspect}
+              waiting={value === null}
             />
           ))}
           {visibleTiles.length === 0 && (
             <div className="empty small">
-              Nothing to show yet. Connect a sensor or start the test.
+              No tiles are chosen. Use Edit to pick what this face shows.
             </div>
           )}
         </div>
@@ -229,12 +406,53 @@ export function Dashboard({
       </section>
 
       <section className="panel mmp-panel">
-        <div className="panel-head">
-          <span className="muted">Live MMP curve (watt)</span>
-        </div>
-        <ErrorBoundary label="MMP curve">
-          <MmpCurve series={curves} />
-        </ErrorBoundary>
+        {protocol.sport === 'bike' ? (
+          <>
+            <div className="panel-head">
+              <span className="muted">Live MMP curve (watt)</span>
+            </div>
+            <ErrorBoundary label="MMP curve">
+              <DurationCurve series={curves} />
+            </ErrorBoundary>
+          </>
+        ) : (
+          <>
+            <div className="panel-head">
+              <span className="muted">
+                {runView === 'nomogram' ? 'Pace · gradient · VO₂' : 'Flat-equivalent speed (km/h)'}
+              </span>
+              <span className="spacer" />
+              <div className="segmented small">
+                <button
+                  className={runView === 'nomogram' ? 'on' : 'ghost'}
+                  onClick={() => setRunView('nomogram')}
+                >
+                  Nomogram
+                </button>
+                <button
+                  className={runView === 'speed' ? 'on' : 'ghost'}
+                  onClick={() => setRunView('speed')}
+                >
+                  Curve
+                </button>
+              </div>
+            </div>
+            <ErrorBoundary label={runView === 'nomogram' ? 'Nomogram' : 'Speed curve'}>
+              {runView === 'nomogram' ? (
+                <Nomogram
+                  speedKph={metrics.speedMs == null ? null : metrics.speedMs * 3.6}
+                  inclinePct={
+                    metrics.inclinePct ?? samples[samples.length - 1]?.inclinePct ?? null
+                  }
+                  economyPct={athlete.economyPct ?? 100}
+                  vo2max={athlete.vo2maxMlKgMin}
+                />
+              ) : (
+                <DurationCurve series={runCurves} decimals={1} minTop={12} />
+              )}
+            </ErrorBoundary>
+          </>
+        )}
       </section>
 
       <section className="panel laps-panel">
@@ -304,6 +522,127 @@ export function Dashboard({
           onClose={() => setLactate(null)}
         />
       )}
+      </div>
+    </>
+  )
+}
+
+/**
+ * The machine is live and nothing is being recorded.
+ *
+ * Deliberately the loudest thing this app draws. Somebody is about to step onto
+ * a moving belt, or has walked away from one. It sits above the dashboard
+ * rather than inside it, so it cannot be scrolled past or covered by a panel,
+ * and it offers the two ways out: stop the machine, or start the test that
+ * should have been running.
+ */
+/**
+ * The two power sources, and what the correction is doing about them.
+ *
+ * The operator's question during a test is not "what is the power" but "is the
+ * power real". One trace cannot answer that. Shown only when there is something
+ * to say: two sources reporting, or a correction in force.
+ *
+ * Drift is the number worth watching. A steady bias is a drivetrain and is
+ * uninteresting; a bias that moves is the athlete's actual load changing under
+ * a label that is not changing, which is the failure this whole feature exists
+ * for.
+ */
+function PowerSources({
+  snapshot,
+  agreement,
+  manager,
+}: {
+  snapshot: RunnerSnapshot
+  agreement: PowerAgreement | null
+  manager: SensorManager
+}) {
+  const pair = manager.powerPair()
+  const correcting = snapshot.powerMatchFactor != null && snapshot.powerMatchFactor !== 1
+  if (!agreement && !correcting) return null
+
+  const drift = agreement?.driftPctPerHour
+  // Two percent is the accuracy most trainers claim for themselves, so a bias
+  // wider than that is the machine outside its own specification.
+  const biasOff = agreement != null && Math.abs(agreement.biasPct) > 2
+  const driftOff = drift != null && Math.abs(drift) > 2
+
+  return (
+    <div className={`power-sources${snapshot.powerMatchState === 'holding' ? ' warn' : ''}`}>
+      <span className="label">Power</span>
+      {pair.reference && (
+        <span>
+          <strong>{Math.round(pair.reference.watts)} W</strong> {pair.reference.name}
+        </span>
+      )}
+      {pair.machine && (
+        <span className="muted">
+          {Math.round(pair.machine.watts)} W {pair.machine.name}
+        </span>
+      )}
+      {agreement && (
+        <span className={biasOff ? 'flag' : 'muted'}>
+          bias {agreement.biasPct > 0 ? '+' : ''}
+          {agreement.biasPct.toFixed(1)}%
+        </span>
+      )}
+      {drift != null && (
+        <span className={driftOff ? 'flag' : 'muted'} title="Change in bias per hour">
+          drift {drift > 0 ? '+' : ''}
+          {drift.toFixed(1)}%/h
+        </span>
+      )}
+      {correcting && (
+        <span>
+          commanding {snapshot.commandedPower ?? '—'} W for {snapshot.targetPower ?? '—'} W
+        </span>
+      )}
+      {snapshot.powerMatchState === 'holding' && (
+        <strong className="flag">reference meter missing, correction held</strong>
+      )}
+    </div>
+  )
+}
+
+function MotionAlarm({
+  sport,
+  state,
+  canStop,
+  onStop,
+  onStart,
+}: {
+  sport: 'bike' | 'run'
+  state: string
+  canStop: boolean
+  onStop: () => void
+  onStart: () => void
+}) {
+  const what = sport === 'run' ? 'The treadmill is running' : 'The bike is being driven'
+  const why =
+    state === 'finished'
+      ? 'The test is finished and nothing is being recorded.'
+      : state === 'paused'
+        ? 'The test is paused and nothing is being recorded.'
+        : 'Nothing is being recorded.'
+
+  return (
+    <div className="motion-alarm" role="alert">
+      <span className="motion-mark" aria-hidden="true">
+        ⚠
+      </span>
+      <div className="motion-text">
+        <strong>{what}</strong>
+        <span>{why}</span>
+      </div>
+      <span className="spacer" />
+      {canStop && (
+        <button className="motion-stop" onClick={onStop}>
+          Stop the machine
+        </button>
+      )}
+      <button className="ghost" onClick={onStart}>
+        Start recording
+      </button>
     </div>
   )
 }
@@ -316,6 +655,7 @@ function Tile({
   wide,
   note,
   suspect,
+  waiting,
 }: {
   label: string
   value: string
@@ -326,9 +666,15 @@ function Tile({
   suspect?: boolean
   /** Secondary line, e.g. the quality the sensor put on its own reading. */
   note?: string
+  /** Nothing to show yet: the tile holds its place, dimmed, rather than vanishing. */
+  waiting?: boolean
 }) {
   return (
-    <div className={`tile ${tone ?? ''} ${wide ? 'wide' : ''} ${suspect ? 'suspect' : ''}`}>
+    <div
+      className={`tile ${tone ?? ''} ${wide ? 'wide' : ''} ${suspect ? 'suspect' : ''} ${
+        waiting ? 'waiting' : ''
+      }`}
+    >
       <span className="tile-label">{label}</span>
       <span className="tile-value">
         {value}

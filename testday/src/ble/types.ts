@@ -17,6 +17,12 @@ export type MetricKey =
   | 'coreQuality'
   /** CORE sensor: 0 HRM unsupported, 1 supported not receiving, 2 receiving. */
   | 'coreHrmState'
+  /**
+   * Share of power produced by the left leg, percent. A meter that measures one
+   * side and doubles it reports a constant 50, which is the only signal
+   * Bluetooth gives about how many legs a power figure rests on.
+   */
+  | 'pedalBalancePct'
   /** Ventilation wearable: minute ventilation, L/min. */
   | 'ventilationLMin'
   /** Ventilation wearable: breaths per minute. */
@@ -34,6 +40,16 @@ export type MetricKey =
 export type MetricUpdate = Partial<Record<MetricKey, number>> & {
   /** Beat-to-beat intervals in ms, when the strap sends them. */
   rrIntervalsMs?: number[]
+  /**
+   * The controllable machine's own power, when a separate meter won `power`.
+   *
+   * Recorded as its own quantity and never blended into `power`. Two devices
+   * measuring the same rider at different points in the drivetrain disagree by
+   * a few percent on a good day, and by considerably more as a trainer warms
+   * up; averaging them would produce a number neither device measured and hide
+   * exactly the discrepancy worth seeing.
+   */
+  powerSecondaryW?: number
 }
 
 export type DeviceKind =

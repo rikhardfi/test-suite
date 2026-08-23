@@ -265,20 +265,65 @@ kbd {
 
 /* --- dashboard ---------------------------------------------------------- */
 
+/*
+ * Two splits, both draggable, both remembered per sport.
+ *
+ * How much room the numbers deserve against the schedule is not a question with
+ * one answer: a ramp test is read off the tiles, a lactate step test is read off
+ * the lap table, and the same protocol looks different on a laptop than on the
+ * lab monitor. The percentages below are the starting point, not the verdict.
+ */
 .dashboard {
+  --dash-cols: 74;
+  --dash-rows: 40;
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(280px, 1fr);
-  grid-template-rows: auto auto minmax(200px, 1fr) auto;
+  grid-template-columns: minmax(0, calc(var(--dash-cols) * 1%)) 6px minmax(240px, 1fr);
+  grid-template-rows:
+    auto
+    minmax(90px, calc(var(--dash-rows) * 1%))
+    6px
+    minmax(120px, 1fr)
+    auto;
   grid-template-areas:
-    'head head'
-    'tiles mmp'
-    'graph laps'
-    'controls controls';
+    'head head head'
+    'tiles vsplit mmp'
+    'hsplit vsplit hsplit-right'
+    'graph vsplit laps'
+    'controls controls controls';
   gap: 10px;
   padding: 10px;
   overflow: hidden;
+}
+
+.split {
+  border-radius: 3px;
+  background: transparent;
+  transition: background 120ms ease;
+  /* Above the panels either side, so nothing can end up on top of the grip. */
+  position: relative;
+  z-index: 2;
+}
+.split:hover,
+.split.dragging {
+  background: var(--accent);
+}
+.split-v {
+  grid-area: vsplit;
+  cursor: col-resize;
+}
+.split-h {
+  grid-area: hsplit;
+  cursor: row-resize;
+}
+.split-h-right {
+  grid-area: hsplit-right;
+  cursor: row-resize;
+}
+/* Dragging a divider must not select the text either side of it. */
+.dashboard.splitting {
+  user-select: none;
 }
 
 .dash-head {
@@ -310,6 +355,7 @@ kbd {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  min-height: 0;
 }
 .face-head {
   display: flex;
@@ -321,11 +367,20 @@ button.small {
   font-size: 11px;
 }
 
+/*
+ * The tile grid scrolls inside the space it is given rather than spilling out
+ * of it. It used to overflow silently onto the graph below, which was invisible
+ * while empty tiles were dropped from the grid and obvious the moment they
+ * stopped being.
+ */
 .tiles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: start;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 
 /* The flip side carries everything, so it trades size for density. */
@@ -403,6 +458,18 @@ button.small {
   color: var(--warn, #ff922d);
 }
 
+/*
+ * A tile with no number yet. It keeps its place so the layout is the same
+ * before and during a test, and recedes so that a live number is still what
+ * the eye lands on from across the room.
+ */
+.tile.waiting {
+  border-style: dashed;
+}
+.tile.waiting .tile-value {
+  color: var(--line-strong);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -428,6 +495,45 @@ button.small {
 .mmp-panel {
   grid-area: mmp;
   min-height: 180px;
+}
+
+/* The nomogram gives up its bottom strip to the numbers read off it. */
+.nomogram {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.nomogram .chart {
+  flex: 1;
+  min-height: 0;
+}
+.nomogram-readout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 2px 12px;
+  margin: 0;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--line);
+}
+.nomogram-readout dt {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.nomogram-readout dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 15px;
+}
+.segmented.small button {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.segmented button.on {
+  background: var(--panel-2);
+  border-color: var(--accent);
 }
 .laps-panel {
   grid-area: laps;
@@ -624,6 +730,20 @@ tr.done td {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/*
+ * A panel on a scrolling page keeps its full height.
+ *
+ * `.panel` is shrinkable and clips what does not fit, which is what the
+ * dashboard needs of a graph in a fixed grid cell. On a page it meant the
+ * panels quietly compressed to fit the window and hid their own contents
+ * instead of the page growing a scrollbar, so the bottom of Settings was
+ * unreachable. Here the page scrolls and the panel does not shrink.
+ */
+.page > .panel,
+.detail > .panel {
+  flex: 0 0 auto;
 }
 .page-head {
   display: flex;
@@ -862,6 +982,7 @@ tr.done td {
 }
 
 @media (max-width: 900px) {
+  /* One column: the panels stack, and there is nothing left to split. */
   .dashboard {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto minmax(220px, 1fr) minmax(160px, auto) minmax(140px, auto) auto;
@@ -872,6 +993,9 @@ tr.done td {
       'laps'
       'mmp'
       'controls';
+  }
+  .split {
+    display: none;
   }
   .tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -922,6 +1046,66 @@ tr.done td {
 
 .rec.idle {
   color: var(--muted);
+}
+
+/*
+ * The machine is live and nothing is recording. This is the one alarm in the
+ * app that is allowed to move, because it has to be caught by someone who is
+ * looking at the athlete rather than at the screen.
+ */
+.motion-alarm {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  color: #12060a;
+  background: var(--orange);
+  border-bottom: 3px solid #12060a;
+  animation: motion-pulse 1.1s ease-in-out infinite;
+}
+.motion-mark {
+  font-size: 30px;
+  line-height: 1;
+}
+.motion-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.motion-text strong {
+  font-family: var(--mono);
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+.motion-alarm button {
+  color: #12060a;
+  border-color: #12060a;
+  background: transparent;
+  font-weight: 600;
+}
+.motion-alarm .motion-stop {
+  background: #12060a;
+  color: var(--orange);
+}
+
+@keyframes motion-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(0.72);
+  }
+}
+
+/* A pulsing bar is a hazard warning, not a decoration: honour the setting. */
+@media (prefers-reduced-motion: reduce) {
+  .motion-alarm {
+    animation: none;
+    outline: 3px solid #12060a;
+    outline-offset: -6px;
+  }
 }
 
 .resume-banner {
@@ -1100,4 +1284,44 @@ input.invalid {
   font-style: normal;
   color: var(--muted);
   font-size: 12px;
+}
+
+/* --- the two power sources, and the correction between them --------------- */
+
+/*
+ * The operator's question during a test is not what the power is but whether it
+ * is real, and one trace cannot answer that. Sits under the head, quiet while
+ * the two sources agree and loud when they stop.
+ */
+.power-sources {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  background: var(--panel-2);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--mono);
+}
+.power-sources.warn {
+  border: 1px solid var(--orange);
+  border-left-width: 3px;
+}
+.power-sources .label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  opacity: 0.6;
+}
+.power-sources .flag {
+  color: var(--orange);
+}
+.source-roles p {
+  margin: 2px 0;
+}
+.check {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }

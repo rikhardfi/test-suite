@@ -12,16 +12,21 @@ import { DEFAULT_ATHLETE, newId, type Athlete, type Protocol } from './model/pro
 import { builtInProtocols } from './model/presets'
 import { protocolDurationS } from './model/protocol'
 import { TestRunner, type SessionRecord } from './model/session'
+import { PowerMatch, ReferenceWatch } from './model/powermatch'
+import { describeProbe, runErgProbe, type TrainerResponse } from './ble/probe'
 import { formatClock, mmpCurve } from './model/metrics'
 import { createRecorder, isDesktop } from './model/recorder.create'
 import { IDLE_STATUS, headerFor, type RecorderStatus } from './model/recorder'
 import type { SessionSummary } from './model/journal'
 import {
+  applySettings,
   deleteProtocol,
   ensureParticipantSalt,
+  importLegacyProtocols,
   listProtocols,
   listSessions,
   loadSettings,
+  loadStoredSettings,
   saveProtocol,
   saveSettings,
   type Settings as SettingsShape,
@@ -33,6 +38,12 @@ type View = 'run' | 'protocols' | 'analysis' | 'settings'
 const BEST_CURVE_SESSIONS = 20
 
 const MIGRATION_KEY = 'testday.migrated.v1'
+
+/**
+ * Its own marker, deliberately: the sessions rescue above may already have run
+ * on this origin, and protocols still need collecting from it.
+ */
+const PROTOCOL_MIGRATION_KEY = 'testday.migrated.protocols.v1'
 
 const DEFAULT_SETTINGS: SettingsShape = {
   athlete: DEFAULT_ATHLETE,
@@ -58,6 +69,12 @@ export default function App() {
   const [settings, setSettings] = useState<SettingsShape>(() =>
     ensureParticipantSalt(loadSettings(DEFAULT_SETTINGS)),
   )
+  /**
+   * Settings boot from this origin's localStorage and are then corrected from
+   * the copy the desktop app keeps as a file. Nothing is written back until
+   * that has happened, or the defaults would overwrite the record.
+   */
+  const [hydrated, setHydrated] = useState(false)
   const [saved, setSaved] = useState<Protocol[]>([])
   const [view, setView] = useState<View>('run')
   const [sensorsOpen, setSensorsOpen] = useState(false)
@@ -66,6 +83,18 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [activeProtocol, setActiveProtocol] = useState<Protocol | null>(null)
   const [runner, setRunner] = useState<TestRunner | null>(null)
+  /**
+   * The power correction and the probe that calibrated it.
+   *
+   * One instance for the life of the app rather than one per runner: the
+   * multiplier is measured in the warm-up, which happens before a protocol is
+   * necessarily settled on, and it is a property of the equipment rather than
+   * of the test.
+   */
+  const powerMatchRef = useRef(new PowerMatch())
+  const referenceWatchRef = useRef(new ReferenceWatch())
+  const [probe, setProbe] = useState<TrainerResponse | null>(null)
+  const [probing, setProbing] = useState(false)
   const [bestCurve, setBestCurve] = useState<{ durationS: number; watts: number }[]>([])
   const [toast, setToast] = useState<string | null>(null)
   const [status, setStatus] = useState<RecorderStatus>(IDLE_STATUS)
@@ -78,9 +107,21 @@ export default function App() {
   )
 
   useEffect(() => {
-    saveSettings(settings)
+    let cancelled = false
+    void loadStoredSettings().then((stored) => {
+      if (cancelled) return
+      if (stored) setSettings((s) => ensureParticipantSalt(applySettings(s, stored)))
+      setHydrated(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (hydrated) saveSettings(settings)
     manager.setWheelCircumference(settings.wheelCircumferenceM)
-  }, [settings, manager])
+  }, [settings, hydrated, manager])
 
   useEffect(() => recorder.onStatus(setStatus), [recorder])
 
@@ -179,6 +220,89 @@ export default function App() {
     }
   }, [status.recording, runner, manager, recorder])
 
+  /**
+   * Who is measuring what, written once as the session opens.
+   *
+   * The gate for this feature warns rather than blocks, which puts the weight
+   * here: a warning that only ever appeared on screen at the start is no
+   * warning at all a year later. Reference and machine identities, the
+   * correction in force, and every doubt about the meter go into the journal
+   * where the report can find them.
+   */
+  const recordPowerSources = useCallback(() => {
+    const pair = manager.powerPair()
+    const match = powerMatchRef.current
+    const verdict = referenceWatchRef.current.verdict({
+      hasSeparateReference: pair.machine != null,
+      // Item 5 of the improvements list. Until it exists there is no zero
+      // offset to point at, and saying so is better than implying there was.
+      hasZeroOffset: false,
+    })
+    recorder.event('powerSources', {
+      reference: pair.reference?.name ?? '',
+      referenceId: pair.reference?.id ?? '',
+      machine: pair.machine?.name ?? '',
+      machineId: pair.machine?.id ?? '',
+      correcting: settings.powerMatch?.enabled === true,
+      calibrated: match.isCalibrated,
+      factor: Number(match.factor.toFixed(4)),
+      sidedness: verdict.sidedness,
+      warnings: verdict.warnings.join(' | '),
+    })
+  }, [manager, recorder, settings.powerMatch?.enabled])
+
+  /**
+   * Thirty seconds that answer whether the trainer is listening and by how much
+   * it lies. Run from the sensor panel, in the warm-up, before it matters.
+   */
+  const probeErg = useCallback(async () => {
+    const control = manager.machine?.control
+    if (!control) {
+      setToast('No controllable machine is connected.')
+      return
+    }
+    setProbing(true)
+    try {
+      const result = await runErgProbe({
+        control,
+        read: () => {
+          const pair = manager.powerPair()
+          return {
+            referenceW: pair.reference?.watts,
+            machineW: pair.machine?.watts,
+          }
+        },
+      })
+      setProbe(result)
+      if (result.ok && result.multiplier != null) {
+        powerMatchRef.current.calibrate(result.multiplier, 0, 'probe')
+      }
+      setToast(describeProbe(result))
+    } catch (error) {
+      setToast(`ERG probe failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setProbing(false)
+      // The probe leaves the machine holding its last set-point; put it back.
+      void control.stop().catch(() => undefined)
+    }
+  }, [manager])
+
+  /**
+   * Whether the reference meter measures one leg or two, watched continuously.
+   *
+   * Bluetooth will not answer that directly. What it reports is pedal balance,
+   * and a meter that halves one leg and doubles it again reports exactly 50.0
+   * forever. Watched outside a recording as well as inside one, because the
+   * answer belongs to the device rather than to the session.
+   */
+  useEffect(() => {
+    return manager.onMetric((_deviceId, update) => {
+      if (update.pedalBalancePct != null) {
+        referenceWatchRef.current.observe(update.pedalBalancePct)
+      }
+    })
+  }, [manager])
+
   useEffect(() => {
     void listProtocols().then(setSaved)
   }, [])
@@ -222,6 +346,28 @@ export default function App() {
     })()
   }, [])
 
+  /**
+   * The same rescue for protocols, which used to live in the same per-origin
+   * store and disappeared from view the moment the app was run a different way.
+   * Kept separate from the session rescue above so that a machine which has
+   * already done that one still collects its protocols.
+   */
+  useEffect(() => {
+    if (!isDesktop()) return
+    if (localStorage.getItem(PROTOCOL_MIGRATION_KEY)) return
+    void (async () => {
+      try {
+        const imported = await importLegacyProtocols()
+        if (imported > 0) {
+          setSaved(await listProtocols())
+          setToast(`Recovered ${imported} protocol(s) saved before protocols became files.`)
+        }
+      } finally {
+        localStorage.setItem(PROTOCOL_MIGRATION_KEY, '1')
+      }
+    })()
+  }, [])
+
   // Anything the recorder never closed was interrupted, and is offered back.
   const refreshInterrupted = useCallback(async () => {
     const open = await recorder.unclosed()
@@ -252,6 +398,7 @@ export default function App() {
       onStart: (startedAt) => {
         void recorder
           .begin(headerFor(id, activeProtocol, settings.athlete, startedAt))
+          .then(() => recordPowerSources())
           .catch((error: unknown) =>
             setToast(`Recording did not start: ${error instanceof Error ? error.message : String(error)}`),
           )
@@ -259,6 +406,10 @@ export default function App() {
       onSample: (sample) => recorder.sample(sample),
       onLactate: (entry) => recorder.lactate(entry),
       onEvent: (kind, data) => recorder.event(kind, data),
+      // Off unless the operator has said the reference meter is worth
+      // believing. With it off the raw protocol target is commanded, which is
+      // what every session before this one did.
+      powerMatch: settings.powerMatch?.enabled ? powerMatchRef.current : undefined,
     })
     setRunner((previous) => {
       previous?.dispose()
@@ -395,6 +546,13 @@ export default function App() {
             status={status}
             durability={recorder.durability}
             frontTiles={settings.dashboardTiles?.[activeProtocol.sport] ?? []}
+            layout={settings.dashboardLayout?.[activeProtocol.sport]}
+            onLayoutChange={(split) =>
+              setSettings((s) => ({
+                ...s,
+                dashboardLayout: { ...s.dashboardLayout, [activeProtocol.sport]: split },
+              }))
+            }
             onOpenSensors={() => setSensorsOpen(true)}
             onEditTiles={() => setTilesOpen(true)}
             onEditEnvironment={() => setEnvironmentOpen(true)}
@@ -454,6 +612,13 @@ export default function App() {
           ftpWatts={settings.athlete.ftpWatts}
           rememberedCount={settings.sensors?.known?.length ?? 0}
           onReconnectRemembered={() => void reconnectSensors()}
+          probe={probe}
+          probing={probing}
+          onProbe={() => void probeErg()}
+          correcting={settings.powerMatch?.enabled === true}
+          onCorrectingChange={(enabled) =>
+            setSettings((s) => ({ ...s, powerMatch: { enabled } }))
+          }
           onClose={() => setSensorsOpen(false)}
         />
       )}

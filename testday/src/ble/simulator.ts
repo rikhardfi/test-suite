@@ -8,6 +8,47 @@ export interface SimulatorOptions {
   restingHr?: number
   /** 0 = perfect robot, 1 = ragged human. */
   noise?: number
+  /**
+   * A second power source, so the dual-source path can be exercised without
+   * two real devices.
+   *
+   * The defaults reproduce the failure this app exists to catch, measured from
+   * a real session on 14 August 2026: the meter reads about 5% above the
+   * trainer at the start and drifts down through it as the unit warms, while
+   * the trainer holds its own number at the commanded target throughout. Left
+   * alone, that is 12 W of load quietly leaving a test that says 200 W from
+   * beginning to end.
+   */
+  referenceMeter?: {
+    /** Drivetrain loss plus calibration offset, at the start. */
+    biasPct?: number
+    /** How fast the trainer's own estimate climbs, in points of bias per hour. */
+    driftPctPerHour?: number
+    /** False makes it report a constant 50/50, the way a one-sided meter does. */
+    dualSided?: boolean
+  }
+}
+
+/**
+ * A power meter that disagrees with the trainer, the way a real one does.
+ *
+ * Registered as its own device with its own kind, so it wins `power` under the
+ * normal arbitration and the trainer's reading becomes the secondary trace.
+ * Nothing here is special-cased downstream: the app cannot tell it from a pair
+ * of real devices.
+ */
+class SimulatedPowerMeter implements SensorDevice {
+  readonly id = 'sim:meter'
+  readonly name = 'Simulated pedal power meter'
+  readonly kind = 'powerMeter' as const
+  readonly provides = ['power', 'cadence', 'pedalBalancePct'] as const
+  state = 'connected' as const
+
+  constructor(private readonly manager: SensorManager) {}
+
+  disconnect(): void {
+    this.manager.remove(this.id)
+  }
 }
 
 /**
@@ -54,6 +95,10 @@ export class Simulator implements SensorDevice, MachineControl {
   private readonly maxHr: number
   private readonly restingHr: number
   private readonly noise: number
+  private readonly meterOptions: SimulatorOptions['referenceMeter']
+  private meter: SimulatedPowerMeter | null = null
+  /** Seconds since the simulator started, for the warming drift. */
+  private runtimeS = 0
 
   constructor(
     private readonly manager: SensorManager,
@@ -63,7 +108,22 @@ export class Simulator implements SensorDevice, MachineControl {
     this.maxHr = options.maxHr ?? 190
     this.restingHr = options.restingHr ?? 52
     this.noise = options.noise ?? 1
+    this.meterOptions = options.referenceMeter
     this.hr = this.restingHr + 12
+  }
+
+  /**
+   * Adds the second power source, if one was asked for.
+   *
+   * Separate from the constructor because it registers a device, and a
+   * constructor that reaches into the manager is a constructor with a surprise
+   * in it.
+   */
+  attachReferenceMeter(): SensorDevice | null {
+    if (!this.meterOptions || this.meter) return this.meter
+    this.meter = new SimulatedPowerMeter(this.manager)
+    this.manager.addVirtual(this.meter)
+    return this.meter
   }
 
   get control(): MachineControl {
@@ -107,6 +167,7 @@ export class Simulator implements SensorDevice, MachineControl {
   private tick(): void {
     const dt = 0.25
     this.phase += dt
+    this.runtimeS += dt
 
     // Trainer chases the target; a pedal-stroke ripple keeps the trace honest.
     this.power += (this.targetPower - this.power) * 0.35
@@ -150,6 +211,27 @@ export class Simulator implements SensorDevice, MachineControl {
       coreQuality: 3,
       coreHrmState: 2,
     })
+
+    if (this.meter) {
+      // The trainer holds *its own* reading at the target, so the meter is what
+      // moves: it starts high by the drivetrain bias and is dragged down as the
+      // trainer's estimate climbs with heat. Exactly the pattern that makes a
+      // constant-load session drift while every label stays put.
+      const bias = this.meterOptions?.biasPct ?? 4.9
+      const driftPerHour = this.meterOptions?.driftPctPerHour ?? -6.7
+      const offsetPct = bias + (driftPerHour * this.runtimeS) / 3600
+      const meterPower = Math.max(0, Math.round(power * (1 + offsetPct / 100)))
+      this.manager.ingest(this.meter.id, {
+        power: meterPower,
+        cadence: Math.max(0, Math.round(this.cadence)),
+        // A one-sided meter halves a leg and doubles it again, so it reports
+        // exactly 50 forever. A real dual-sided one never sits still.
+        pedalBalancePct:
+          this.meterOptions?.dualSided === false
+            ? 50
+            : Number((49.5 + Math.sin(this.phase * 0.7) * 2).toFixed(1)),
+      })
+    }
   }
 }
 

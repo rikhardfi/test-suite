@@ -40,6 +40,10 @@ export function sampleRow(s: Sample): (string | number)[] {
     s.heatStrainIndex?.toFixed(1) ?? '',
     s.coreQuality ?? '',
     s.coreHrmState ?? '',
+    s.powerSecondaryW ?? '',
+    s.commandedPower ?? '',
+    s.powerMatchFactor ?? '',
+    s.powerMatchHeld ? 1 : '',
   ]
 }
 

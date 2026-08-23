@@ -13,6 +13,7 @@ easy to get wrong.
 testday.command   double-clickable launcher, see below
 testday/          the application (Electron + React + TypeScript)
 docs/             design notes and the reviewed improvement document
+LICENSE           MIT, and a copy of the same licence sits in testday/
 tasks/            scratch notes, not tracked
 ```
 

@@ -167,8 +167,8 @@ File Provider stall on every content read, and `tsc` and `vitest` hang.
 [`rikhardfi/hengitystutkimus-fi`](https://github.com/rikhardfi/hengitystutkimus-fi), which is what
 Cloudflare Pages deploys. This repository began as a copy of it, so an Astro site, a WordPress-era
 redirect table and a Hugo migration handover sat here for a while, deploying nothing. They were
-removed once confirmed identical to the live repository at the same commit; the history is still in
-this repository's git log if it is ever needed.
+removed once confirmed identical to the live repository at the same commit, and stripped from this
+repository's history before it was made public.
 
 ## Outstanding, waiting on hardware
 

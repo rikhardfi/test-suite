@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { FtmsControl } from './ftms'
+import { FtmsControl, explainControlError } from './ftms'
 import { FTMS_OP } from './uuids'
 
 const FEATURES = {
@@ -109,7 +109,11 @@ describe('FtmsControl', () => {
     await control.setTargetPower(200)
 
     point.result = 0x05
-    await expect(control.setTargetPower(210)).rejects.toThrow(/not permitted/)
+    const refused = control.setTargetPower(210)
+    await expect(refused).rejects.toThrow(/not permitted/)
+    const message = await refused.then(() => '', (e: Error) => e.message)
+    expect(explainControlError(message)).toMatch(/Another application/)
+    expect(explainControlError('FTMS setTargetPower: no response from machine')).toMatch(/no response/)
 
     point.result = 0x01
     await control.setTargetPower(220)

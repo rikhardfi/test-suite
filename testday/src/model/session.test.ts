@@ -696,4 +696,71 @@ describe('the protocol as executed', () => {
     runner.finish()
     expect(events.filter((e) => e.kind === 'pause')).toHaveLength(1)
   })
+
+  /**
+   * The target on the screen is a request. These are about whether the machine
+   * agreed, which on 18 September 2026 it had stopped doing while every label
+   * carried on as before.
+   */
+  describe('machine confirmation', () => {
+    const withMachine = (setTargetPower: (w: number) => Promise<void>) => {
+      const events: { kind: string; data?: Record<string, number | string | boolean> }[] = []
+      const { control } = recordingMachine()
+      const runner = new TestRunner({
+        protocol: stepProtocol(),
+        athlete: { ...DEFAULT_ATHLETE, ftpWatts: 300 },
+        readMetrics: () => ({ power: 200 }),
+        machine: () => ({ ...control, setTargetPower }),
+        now: () => Date.now(),
+        onEvent: (kind, data) => events.push({ kind, data }),
+      })
+      return { runner, events }
+    }
+
+    it('shows what the machine confirmed, and is not behind', async () => {
+      const { runner, events } = withMachine(() => Promise.resolve())
+      runner.start()
+      await advance(10)
+      const snapshot = runner.snapshot()
+      expect(snapshot.controlAck).toMatchObject({ value: 200, unit: 'W' })
+      expect(snapshot.controlBehindS).toBe(0)
+      expect(events.some((e) => e.kind === 'controlBehind')).toBe(false)
+    })
+
+    it('says so, once, when a changed target is never confirmed, and again when it is', async () => {
+      let answering = true
+      const held: (() => void)[] = []
+      const { runner, events } = withMachine(() =>
+        answering ? Promise.resolve() : new Promise<void>((resolve) => held.push(resolve)),
+      )
+      runner.start()
+      await advance(3)
+
+      answering = false
+      runner.adjustIntensity(-5)
+      await advance(8)
+      expect(runner.snapshot().controlBehindS).toBeGreaterThanOrEqual(5)
+      expect(runner.snapshot().controlAck).toMatchObject({ value: 200 })
+      const behind = events.filter((e) => e.kind === 'controlBehind')
+      expect(behind).toHaveLength(1)
+      expect(behind[0].data).toMatchObject({ wanted: 190, acknowledged: 200, unit: 'W' })
+
+      answering = true
+      held.forEach((resolve) => resolve())
+      await advance(2)
+      expect(runner.snapshot().controlBehindS).toBe(0)
+      expect(events.filter((e) => e.kind === 'controlRecovered')).toHaveLength(1)
+    })
+
+    it('does not count a pause as the machine being behind', async () => {
+      const { runner, events } = withMachine(() => Promise.resolve())
+      runner.start()
+      await advance(3)
+      runner.pause()
+      await advance(20)
+      runner.start()
+      await advance(2)
+      expect(events.some((e) => e.kind === 'controlBehind')).toBe(false)
+    })
+  })
 })

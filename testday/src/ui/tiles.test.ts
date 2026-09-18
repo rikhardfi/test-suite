@@ -24,6 +24,8 @@ const context = (over: Partial<TileContext> = {}): TileContext => ({
     step: null,
     totalS: 300,
     controlError: null,
+  controlAck: null,
+  controlBehindS: 0,
   },
   athlete: { ...DEFAULT_ATHLETE, massKg: 75, ftpWatts: 300, maxHr: 190, restingHr: 50 },
   protocol: protocol(),

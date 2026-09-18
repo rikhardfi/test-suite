@@ -14,6 +14,7 @@ import { lapsFromSamples, type RunnerSnapshot, type TestRunner } from '../model/
 import { speedCurve } from '../model/running'
 import { NO_MOTION, machineIsMoving, watchMotion, type MotionWatch } from '../model/motion'
 import { agreementFromSamples, type PowerAgreement } from '../model/powermatch'
+import { explainControlError } from '../ble/ftms'
 import type { RecorderStatus } from '../model/recorder'
 import type { SensorManager } from '../ble/manager'
 import { Modal } from './Modal'
@@ -339,10 +340,12 @@ export function Dashboard({
 
       {snapshot.controlError && (
         <div className="banner error">
-          Machine control: {snapshot.controlError}
+          Machine control: {explainControlError(snapshot.controlError)}
           <button onClick={onOpenSensors}>Sensors</button>
         </div>
       )}
+
+      <MachineControlLine snapshot={snapshot} />
 
       <PowerSources snapshot={snapshot} agreement={agreement} manager={manager} />
 
@@ -599,6 +602,48 @@ function PowerSources({
       )}
       {snapshot.powerMatchState === 'holding' && (
         <strong className="flag">reference meter missing, correction held</strong>
+      )}
+    </div>
+  )
+}
+
+/** Past this the machine is behind, rather than merely being commanded. */
+const CONTROL_BEHIND_WARN_S = 5
+
+/**
+ * What the machine last confirmed, against what it is being asked for.
+ *
+ * The target tile shows the request. Nothing else on the screen says whether
+ * the machine took it, and a machine that has stopped taking targets looks,
+ * from here, exactly like one that is holding them.
+ */
+function MachineControlLine({ snapshot }: { snapshot: RunnerSnapshot }) {
+  const ack = snapshot.controlAck
+  const behind = snapshot.controlBehindS >= CONTROL_BEHIND_WARN_S
+  if (!ack && !behind) return null
+
+  const wanted =
+    (snapshot.commandedPower ?? snapshot.targetPower) != null
+      ? `${snapshot.commandedPower ?? snapshot.targetPower} W`
+      : snapshot.targetKph != null
+        ? `${snapshot.targetKph.toFixed(1)} km/h`
+        : 'the target'
+  const confirmed = ack ? `${ack.unit === 'W' ? ack.value : ack.value.toFixed(1)} ${ack.unit}` : null
+
+  return (
+    <div className={`power-sources${behind ? ' warn' : ''}`}>
+      <span className="label">Machine</span>
+      {behind ? (
+        <strong className="flag">
+          {wanted} not confirmed for {Math.round(snapshot.controlBehindS)} s
+          {confirmed ? `, last confirmed ${confirmed}` : ', nothing confirmed yet'}
+        </strong>
+      ) : (
+        ack && (
+          <span className="muted">
+            {confirmed} confirmed {new Date(ack.at).toLocaleTimeString()}
+          </span>
+        )
       )}
     </div>
   )

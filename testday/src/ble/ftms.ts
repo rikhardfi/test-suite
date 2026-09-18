@@ -150,6 +150,18 @@ export class FtmsControl implements MachineControl {
   }
 }
 
+/**
+ * A control error in the operator's terms. "Control not permitted" is nearly
+ * always a second application holding the trainer, which is the most common
+ * ERG failure there is and the one the raw message does nothing to suggest.
+ */
+export function explainControlError(message: string): string {
+  if (message.includes(FTMS_RESULT[0x05])) {
+    return 'the machine refused control. Another application is probably holding it (a training app, the maker\'s own app, a head unit). Close it there; control is requested again on the next command.'
+  }
+  return message
+}
+
 function labelFor(opCode: number): string {
   const entry = Object.entries(FTMS_OP).find(([, v]) => v === opCode)
   return entry ? entry[0] : `op 0x${opCode.toString(16)}`

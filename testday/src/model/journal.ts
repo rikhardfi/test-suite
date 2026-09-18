@@ -64,6 +64,9 @@ export type JournalEventKind =
   | 'powerMatchClamped'
   | 'powerMatchHold'
   | 'powerMatchResume'
+  /** The machine stopped confirming targets, and when it started again. */
+  | 'controlBehind'
+  | 'controlRecovered'
   /**
    * Which device is supplying the reported power and which is being corrected,
    * plus anything doubtful about the reference meter. Written once at the start

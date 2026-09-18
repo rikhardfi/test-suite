@@ -287,7 +287,7 @@ with `SIGKILL` mid-recording, and checks that every sample the recorder acknowle
 no gaps: truncating a file by hand only tests the reader, not the durability claim.
 
 ```
-npm test    # 424 tests
+npm test    # 427 tests
 ```
 
 ### Verifying the FIT output

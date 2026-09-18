@@ -213,6 +213,20 @@ export interface RunnerSnapshot {
   step: Step | null
   totalS: number
   controlError: string | null
+  /** The last target the machine confirmed, and when. */
+  controlAck: ControlAck | null
+  /**
+   * Seconds the machine has gone without confirming the target in force, zero
+   * when it has. The target on the screen is what was asked for; this is the
+   * only figure that says whether the machine agreed.
+   */
+  controlBehindS: number
+}
+
+export interface ControlAck {
+  value: number
+  unit: 'W' | 'km/h'
+  at: number
 }
 
 export interface RunnerOptions {
@@ -263,6 +277,12 @@ export type RunnerEventKind =
   | 'powerMatchClamped'
   | 'powerMatchHold'
   | 'powerMatchResume'
+  /**
+   * The machine stopped confirming targets, and later started again. Between
+   * the two, the recorded target is what was asked for and not what was set.
+   */
+  | 'controlBehind'
+  | 'controlRecovered'
 
 /** Journal kinds for what the correction reports about itself. */
 const POWER_MATCH_EVENTS = {
@@ -278,6 +298,12 @@ const SAMPLE_INTERVAL_S = 1
 /** Below this the machine is not worth re-commanding. */
 const POWER_EPSILON_W = 1
 const SPEED_EPSILON_KPH = 0.05
+/**
+ * How long a target may go unconfirmed before it is said out loud. A healthy
+ * command is confirmed in a fraction of a second and a failed one times out at
+ * four, so this is past anything that resolves on its own.
+ */
+const CONTROL_BEHIND_S = 5
 
 /**
  * Drives a protocol in real time: advances steps, computes the current target,
@@ -312,6 +338,9 @@ export class TestRunner {
   private lastSentWatts: number | null = null
   private lastSentKph: number | null = null
   private controlInFlight = false
+  private controlAck: ControlAck | null = null
+  private behindSince: number | null = null
+  private behindReported = false
 
   private samples: Sample[] = []
   private lactate: LactateEntry[] = []
@@ -370,6 +399,7 @@ export class TestRunner {
     this.onEvent?.(first ? 'start' : 'resume', { stepIndex: this.stepIndex })
     this.state = 'running'
     this.lastTickAt = this.now()
+    this.behindSince = null
     if (!this.timer) this.timer = setInterval(() => this.tick(), TICK_MS)
     this.emit()
   }
@@ -679,15 +709,26 @@ export class TestRunner {
   /** Sends the current target to the machine, skipping redundant writes. */
   private applyTarget(): void {
     const control = this.machine()
-    if (!control || this.controlInFlight) return
+    if (!control) return
 
     const watts = this.targetPower
     const kph = this.targetKph
 
-    const send = async (fn: () => Promise<void>) => {
+    // Checked on every tick, in flight or not: a command that never comes back
+    // is exactly the case this exists for.
+    if (watts != null && control.canSetPower) {
+      const wanted = Math.round(this.powerMatch ? this.powerMatch.command(watts) : watts)
+      this.trackBehind(wanted, 'W', POWER_EPSILON_W)
+    } else if (kph != null && control.canSetSpeed) {
+      this.trackBehind(kph, 'km/h', SPEED_EPSILON_KPH)
+    }
+    if (this.controlInFlight) return
+
+    const send = async (ack: Omit<ControlAck, 'at'>, fn: () => Promise<void>) => {
       this.controlInFlight = true
       try {
         await fn()
+        this.controlAck = { ...ack, at: Date.now() }
         if (this.controlError) {
           this.controlError = null
           this.emit()
@@ -710,7 +751,7 @@ export class TestRunner {
       const rounded = Math.round(this.powerMatch ? this.powerMatch.command(watts) : watts)
       if (this.lastSentWatts === null || Math.abs(rounded - this.lastSentWatts) >= POWER_EPSILON_W) {
         this.lastSentWatts = rounded
-        void send(() => control.setTargetPower(rounded))
+        void send({ value: rounded, unit: 'W' }, () => control.setTargetPower(rounded))
       }
       return
     }
@@ -718,13 +759,42 @@ export class TestRunner {
     if (kph != null && control.canSetSpeed) {
       if (this.lastSentKph === null || Math.abs(kph - this.lastSentKph) >= SPEED_EPSILON_KPH) {
         this.lastSentKph = kph
-        void send(async () => {
+        void send({ value: kph, unit: 'km/h' }, async () => {
           await control.setTargetSpeedKph(kph)
           const step = this.currentStep
           const incline = step ? stepInclinePct(step) : null
           if (incline != null && control.canSetIncline) await control.setTargetInclinePct(incline)
         })
       }
+    }
+  }
+
+  /**
+   * Notes when the machine has not confirmed the target in force, and says so
+   * in the journal once it has gone on too long. The session of 18 September
+   * 2026 ran 32 minutes at a load 4% under its label with nothing on the screen
+   * or in the record to show it; this is the line that would have.
+   */
+  private trackBehind(wanted: number, unit: ControlAck['unit'], epsilon: number): void {
+    const ack = this.controlAck
+    const confirmed = ack != null && ack.unit === unit && Math.abs(ack.value - wanted) < epsilon
+    if (confirmed) {
+      if (this.behindReported) {
+        this.onEvent?.('controlRecovered', { wanted, unit, stepIndex: this.stepIndex })
+      }
+      this.behindSince = null
+      this.behindReported = false
+      return
+    }
+    this.behindSince ??= this.now()
+    if (!this.behindReported && this.now() - this.behindSince >= CONTROL_BEHIND_S * 1000) {
+      this.behindReported = true
+      this.onEvent?.('controlBehind', {
+        wanted,
+        unit,
+        acknowledged: ack?.unit === unit ? ack.value : '',
+        stepIndex: this.stepIndex,
+      })
     }
   }
 
@@ -793,6 +863,11 @@ export class TestRunner {
       step,
       totalS: this.protocol.steps.reduce((sum, s) => sum + stepTotalS(s), 0),
       controlError: this.controlError,
+      controlAck: this.controlAck,
+      controlBehindS:
+        this.state === 'running' && this.behindSince != null
+          ? Math.max(0, (this.now() - this.behindSince) / 1000)
+          : 0,
     }
     return this.cachedSnapshot
   }

@@ -43,31 +43,55 @@ export class FtmsControl implements MachineControl {
     const pending = this.pending
     if (!pending || pending.opCode !== requestOp) return
 
-    this.pending = null
-    if (result === 0x01) pending.resolve()
-    else pending.reject(new Error(`FTMS ${labelFor(requestOp)}: ${FTMS_RESULT[result] ?? `error 0x${result.toString(16)}`}`))
+    if (result === 0x01) {
+      pending.resolve()
+      return
+    }
+    // A machine that has quietly dropped the control session says so here.
+    // Forgetting it makes the next command ask again instead of failing forever.
+    if (result === 0x05) this.hasControl = false
+    pending.reject(new Error(`FTMS ${labelFor(requestOp)}: ${FTMS_RESULT[result] ?? `error 0x${result.toString(16)}`}`))
   }
 
-  /** Serialises one write + its indication, so commands cannot interleave. */
+  /**
+   * Serialises one write + its indication, so commands cannot interleave.
+   *
+   * Every command must settle, one way or the other. The runner sends nothing
+   * while a command is in flight, so a promise left hanging here silences the
+   * machine for the rest of the session, reconnect or not. Hence the timer
+   * belongs to this command alone (an earlier command's timer once cleared a
+   * later command of the same op code, which then waited forever), and it
+   * covers the write as well as the indication, because a write to a stale
+   * GATT link can simply never return.
+   */
   private send(opCode: number, payload: Uint8Array = new Uint8Array(0)): Promise<void> {
-    const run = async () => {
-      const frame = new Uint8Array(1 + payload.length)
-      frame[0] = opCode
-      frame.set(payload, 1)
+    const run = () =>
+      new Promise<void>((resolve, reject) => {
+        const frame = new Uint8Array(1 + payload.length)
+        frame[0] = opCode
+        frame.set(payload, 1)
 
-      const answered = new Promise<void>((resolve, reject) => {
-        this.pending = { opCode, resolve, reject }
-        setTimeout(() => {
-          if (this.pending?.opCode === opCode) {
-            this.pending = null
-            reject(new Error(`FTMS ${labelFor(opCode)}: no response from machine`))
-          }
-        }, CONTROL_TIMEOUT_MS)
+        const settle = (finish: () => void) => {
+          if (this.pending !== entry) return
+          this.pending = null
+          clearTimeout(timer)
+          finish()
+        }
+        const entry = {
+          opCode,
+          resolve: () => settle(resolve),
+          reject: (error: Error) => settle(() => reject(error)),
+        }
+        const timer = setTimeout(
+          () => entry.reject(new Error(`FTMS ${labelFor(opCode)}: no response from machine`)),
+          CONTROL_TIMEOUT_MS,
+        )
+        this.pending = entry
+
+        this.controlPoint
+          .writeValueWithResponse(frame as BufferSource)
+          .catch((error: unknown) => entry.reject(error instanceof Error ? error : new Error(String(error))))
       })
-
-      await this.controlPoint.writeValueWithResponse(frame as BufferSource)
-      await answered
-    }
 
     // Keep the chain alive even when one command fails.
     const result = this.queue.then(run, run)
@@ -122,7 +146,7 @@ export class FtmsControl implements MachineControl {
   /** Called on disconnect: the machine drops the control session anyway. */
   forgetControl(): void {
     this.hasControl = false
-    this.pending = null
+    this.pending?.reject(new Error('FTMS: machine disconnected'))
   }
 }
 

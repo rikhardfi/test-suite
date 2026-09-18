@@ -134,8 +134,11 @@ export interface Environment {
   altitudeM?: number
   setting?: 'indoor' | 'outdoor'
   note?: string
-  /** Whether these came from a sensor or from the operator. */
-  source: 'sensor' | 'manual' | 'mixed'
+  /**
+   * Whether these came from a sensor, from the operator, or from a monitor's
+   * own log brought in afterwards.
+   */
+  source: 'sensor' | 'manual' | 'mixed' | 'import'
   at: number
 }
 

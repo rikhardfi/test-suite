@@ -163,7 +163,7 @@ export interface JournalEnvironment {
   altitudeM?: number
   setting?: 'indoor' | 'outdoor'
   note?: string
-  source: 'sensor' | 'manual' | 'mixed'
+  source: Environment['source']
 }
 
 /**
@@ -350,7 +350,10 @@ export function recordsToSession(records: readonly JournalRecord[]): SessionReco
     lactate: [...lactate.values()].filter((entry) => !entry.removed),
     rr: rr.length ? rr : undefined,
     events: events.length ? events : undefined,
-    environment: environment.length ? environment : undefined,
+    // By when they were measured, not by when they were written: a monitor's
+    // log imported afterwards lands at the end of the journal and belongs in
+    // the middle of the session.
+    environment: environment.length ? environment.sort((a, b) => a.at - b.at) : undefined,
   }
 }
 

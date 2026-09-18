@@ -35,10 +35,11 @@ export function EnvironmentForm({
   const sensed = Object.values(fromSensor).some((v) => v != null)
 
   const [form, setForm] = useState({
-    tempC: text(existing?.tempC ?? fromSensor.tempC),
-    humidityPct: text(existing?.humidityPct ?? fromSensor.humidityPct),
-    co2Ppm: text(existing?.co2Ppm ?? fromSensor.co2Ppm),
-    pressureHpa: text(existing?.pressureHpa ?? fromSensor.pressureHpa),
+    // What the monitor says now beats what somebody typed an hour ago.
+    tempC: text(fromSensor.tempC ?? existing?.tempC),
+    humidityPct: text(fromSensor.humidityPct ?? existing?.humidityPct),
+    co2Ppm: text(fromSensor.co2Ppm ?? existing?.co2Ppm),
+    pressureHpa: text(fromSensor.pressureHpa ?? existing?.pressureHpa),
     altitudeM: text(existing?.altitudeM),
     setting: existing?.setting ?? ('indoor' as 'indoor' | 'outdoor'),
     note: existing?.note ?? '',

@@ -190,3 +190,24 @@ describe('what the tiles say about their own numbers', () => {
     expect(compute('pctVo2max', context())).toBeNull()
   })
 })
+
+describe('the inspired water tile', () => {
+  it('uses the monitor when there is one', () => {
+    const tile = compute('inspiredWater', context({ metrics: { ambientTempC: 23, humidityPct: 50 } }))
+    expect(tile).toMatchObject({ value: '10.3', unit: 'mg/L' })
+    expect(tile?.note).toMatch(/23\.0 °C · 50% · monitor/)
+  })
+
+  it('falls back to what was entered, and says so', () => {
+    const conditions = { at: Date.now(), tempC: -10, humidityPct: 50, source: 'manual' as const }
+    const tile = compute('inspiredWater', context({ conditions }))
+    expect(Number(tile?.value)).toBeLessThan(1.5)
+    expect(tile?.note).toMatch(/entered/)
+  })
+
+  it('is hidden without both a temperature and a humidity', () => {
+    expect(compute('inspiredWater', context())).toBeNull()
+    expect(compute('inspiredWater', context({ metrics: { ambientTempC: 21 } }))).toBeNull()
+  })
+})
+

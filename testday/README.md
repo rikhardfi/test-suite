@@ -156,6 +156,36 @@ section gives the meter, units, timing method, gaps and caveats. Format version 
 *Samples CSV* stays at 1 Hz and gains `exp_flow_l_min`, `exp_gas_temp_c`, `exp_rh_pct` and
 `exp_flow_coverage`.
 
+## Conditions (the room)
+
+Cold, dry or CO₂-loaded air is a load the airway carries, so the room is part of the measurement and
+not context around it. Every reading is kept with the time it was measured and where it came from
+(`sensor`, `manual`, `mixed`, `import`), on its own slow clock and never resampled up to 1 Hz.
+
+**Three ways in, one record.**
+- **By hand.** *Conditions* on the dashboard. It can be filled in before Start, while the athlete is
+  still warming up: the reading is held and goes in at the head of the recording when it opens. The
+  form reopens on the last values, and anything a connected monitor knows is filled in for you.
+- **From an Aranet4's own log, afterwards.** Analysis → *Conditions* → import the `.xlsx` or `.csv`
+  the Aranet Home app exports. The monitor logs to its own memory whether or not anything is
+  connected, so this needs nothing to work on the day. The readings that belong to the session are
+  attached, plus one logging interval either side; importing the same file twice adds nothing. The
+  date order is taken from the file's own header (`Time(DD/MM/YYYY H:mm:ss)`) and never guessed, and
+  the times are the monitor's local clock read in this computer's time zone, which the record says.
+  Set the monitor to a 1 minute interval on test days: at the default 5 minutes a twenty minute test
+  gets four readings.
+- **Live over Bluetooth.** *Room sensor (standard)* is any sensor with the Bluetooth Environmental
+  Sensing service (temperature, humidity, pressure), read once a minute as one observation. The
+  *Aranet4* profile is there too, but recent firmware wants a pairing the desktop app cannot drive,
+  so whether it connects depends on the monitor in front of you. The file import does not.
+
+**Inspired water.** The *Inspired water* tile and the `waterMgL` field in the research sidecar give
+the water in each litre of room air, in mg/L, from temperature and humidity together (50% is about
+10 mg/L at 23 °C and about 1 mg/L at −10 °C). Buck's saturation pressure and the ideal gas law for
+the vapour, per litre of the air as it is: not BTPS, not dry gas, and barometric pressure does not
+enter. It is the same arithmetic, constant for constant, as `tsi_water_content_mg_l()` in the
+ventilation project, which also reads room air straight from the sidecar's `environment` array.
+
 ## Recordings
 
 The desktop app records to an **append-only journal**: one JSON object per line, `fsync`ed before the
@@ -287,7 +317,7 @@ with `SIGKILL` mid-recording, and checks that every sample the recorder acknowle
 no gaps: truncating a file by hand only tests the reader, not the durability claim.
 
 ```
-npm test    # 427 tests
+npm test    # 446 tests
 ```
 
 ### Verifying the FIT output

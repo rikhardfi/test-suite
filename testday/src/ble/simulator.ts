@@ -72,6 +72,10 @@ export class Simulator implements SensorDevice, MachineControl {
     'heatStrainIndex',
     'coreQuality',
     'coreHrmState',
+    'ambientTempC',
+    'humidityPct',
+    'pressureHpa',
+    'co2Ppm',
   ] as const
   state = 'connected' as const
 
@@ -89,6 +93,8 @@ export class Simulator implements SensorDevice, MachineControl {
   private coreTempC = 37.0
   private skinTempC = 32.5
   private phase = 0
+  /** When the room was last reported; null until the first tick. */
+  private roomReportedAtS: number | null = null
   private timer: ReturnType<typeof setInterval> | null = null
 
   private readonly ftp: number
@@ -211,6 +217,21 @@ export class Simulator implements SensorDevice, MachineControl {
       coreQuality: 3,
       coreHrmState: 2,
     })
+
+    // The room speaks once a minute and on its own, as a real monitor does.
+    // Sent with every tick it would be recorded with every tick.
+    if (this.roomReportedAtS === null || this.runtimeS - this.roomReportedAtS >= 60) {
+      this.roomReportedAtS = this.runtimeS
+      const minutes = this.runtimeS / 60
+      this.manager.ingest(this.id, {
+        // A closed room with somebody working hard in it: warmer, damper and
+        // more CO₂ as the session goes on.
+        ambientTempC: Number((21 + Math.min(2, minutes * 0.03)).toFixed(1)),
+        humidityPct: Math.round(40 + Math.min(12, minutes * 0.15)),
+        pressureHpa: 1003.2,
+        co2Ppm: Math.round(620 + Math.min(900, minutes * 12)),
+      })
+    }
 
     if (this.meter) {
       // The trainer holds *its own* reading at the target, so the meter is what

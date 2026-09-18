@@ -31,8 +31,11 @@ export interface Recorder {
   raw(deviceId: string, t: number, values: Partial<Record<MetricKey, number>>): void
   /** Beat-to-beat intervals, which arrive per beat rather than per second. */
   rr(t: number, intervalsMs: number[]): void
-  /** Conditions, on their own slow clock. */
-  environment(t: number, reading: Omit<Environment, 'at'>): void
+  /**
+   * Conditions, on their own slow clock. `at` is when they were observed, for
+   * a reading that was taken before there was a recording to put it in.
+   */
+  environment(t: number, reading: Omit<Environment, 'at'>, at?: number): void
   /** Returns how many verified copies of the recording now exist. */
   finish(endedAt: number): Promise<FinishResult>
 
@@ -48,6 +51,12 @@ export interface Recorder {
    * later value wins on read.
    */
   amendLactate(sessionId: string, entry: LactateEntry): Promise<SessionRecord | null>
+  /**
+   * Attaches conditions to a session after the fact, from a monitor's own log.
+   * Appended, never merged into what is there: each reading keeps the time it
+   * was measured and the source it came from.
+   */
+  amendEnvironment(session: SessionRecord, readings: Environment[]): Promise<SessionRecord | null>
 
   onStatus(listener: (status: RecorderStatus) => void): () => void
 }

@@ -3,7 +3,8 @@ import { decoupling, wPrimeBalance, type CriticalPowerResult } from '../model/an
 import { VO2_METHODS, computeKcal, pctOfVo2max, type Vo2Method } from '../model/vo2'
 import { CORE_QUALITY } from '../ble/parse'
 import type { Athlete, Protocol } from '../model/protocol'
-import type { RunnerSnapshot, Sample } from '../model/session'
+import type { Environment, RunnerSnapshot, Sample } from '../model/session'
+import { waterContentOf } from '../model/humidity'
 import type { MetricUpdate } from '../ble/types'
 
 /**
@@ -28,6 +29,8 @@ export interface TileContext {
   /** Fitted from previous sessions, when there is a usable fit. */
   cp: CriticalPowerResult | null
   rr: readonly number[]
+  /** The conditions the operator last entered, when no monitor is speaking. */
+  conditions?: Environment | null
 }
 
 export type TileTone = 'power' | 'heart' | 'target' | 'lactate' | 'core' | 'vo2'
@@ -449,6 +452,27 @@ export const TILES: readonly TileDef[] = [
       c.metrics.heatStrainIndex == null
         ? null
         : { value: c.metrics.heatStrainIndex.toFixed(1) },
+  },
+  {
+    key: 'inspiredWater',
+    label: 'Inspired water',
+    about:
+      'Water in each litre of room air, from temperature and humidity together, since neither says it alone: 50% is about 10 mg/L at 23 °C and about 1 mg/L at −10 °C. Per litre of the air as it is, not BTPS. The same arithmetic as the ventilation project, so the two agree. From the monitor when one is connected, otherwise from what was last entered under Conditions.',
+    compute: (c) => {
+      const live = { tempC: c.metrics.ambientTempC, humidityPct: c.metrics.humidityPct }
+      const reading = waterContentOf(live) != null ? live : c.conditions
+      const water = reading ? waterContentOf(reading) : null
+      if (!reading || water == null) return null
+      const from =
+        reading === live
+          ? 'monitor'
+          : `entered ${new Date((reading as Environment).at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+      return {
+        value: water.toFixed(1),
+        unit: 'mg/L',
+        note: `${reading.tempC?.toFixed(1)} °C · ${reading.humidityPct?.toFixed(0)}% · ${from}`,
+      }
+    },
   },
   {
     key: 'hrv',

@@ -10,7 +10,7 @@ import { defaultFrontFor, tileByKey, tilesForSport, type TileContext, type TileT
 import { formatClock, formatCountdown, mmpCurve } from '../model/metrics'
 import { criticalPower } from '../model/analysis'
 import { planPowerSeries, stepLabel, type Athlete, type Protocol } from '../model/protocol'
-import { lapsFromSamples, type RunnerSnapshot, type TestRunner } from '../model/session'
+import { lapsFromSamples, type Environment, type RunnerSnapshot, type TestRunner } from '../model/session'
 import { speedCurve } from '../model/running'
 import { NO_MOTION, machineIsMoving, watchMotion, type MotionWatch } from '../model/motion'
 import { agreementFromSamples, type PowerAgreement } from '../model/powermatch'
@@ -49,6 +49,8 @@ interface Props {
   onOpenSensors: () => void
   onEditTiles: () => void
   onEditEnvironment: () => void
+  /** What was last entered under Conditions, for the tile that needs it. */
+  conditions?: Environment | null
   onFinish: () => void
 }
 
@@ -66,6 +68,7 @@ export function Dashboard({
   onOpenSensors,
   onEditTiles,
   onEditEnvironment,
+  conditions,
   onFinish,
 }: Props) {
   const snapshot = useRunnerSnapshot(runner)
@@ -250,6 +253,7 @@ export function Dashboard({
     samples,
     cp,
     rr,
+    conditions,
   }
 
   /**

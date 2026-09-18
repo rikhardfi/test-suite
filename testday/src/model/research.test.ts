@@ -104,6 +104,22 @@ describe('the research sidecar', () => {
     expect(parsed.athlete.ftpWatts).toBe(DEFAULT_ATHLETE.ftpWatts)
   })
 
+  // The ventilation project reads `environment[].tempC` and `.humidityPct`
+  // from here (`tsi_sidecar_room()`), so those names are a contract.
+  it('carries the conditions in time order, with the water they imply', () => {
+    const withRoom = {
+      ...session(),
+      environment: [
+        { at: 2000, tempC: 23, humidityPct: 50, source: 'import' as const },
+        { at: 1000, tempC: 21, source: 'manual' as const },
+      ],
+    }
+    const parsed = JSON.parse(researchSidecar(withRoom, { appVersion: APP_VERSION }))
+    expect(parsed.environment.map((e: { source: string }) => e.source)).toEqual(['manual', 'import'])
+    expect(parsed.environment[0].waterMgL).toBeNull()
+    expect(parsed.environment[1]).toMatchObject({ tempC: 23, humidityPct: 50, waterMgL: 10.27 })
+  })
+
   it('documents every column the CSV writes', () => {
     const parsed = JSON.parse(researchSidecar(session(), { appVersion: APP_VERSION }))
     expect(parsed.columns.map((c: { name: string }) => c.name)).toEqual(

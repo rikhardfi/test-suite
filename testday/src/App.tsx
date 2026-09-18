@@ -12,7 +12,7 @@ import { FLOW_METER_ID } from './ble/flowMeter'
 import { DEFAULT_ATHLETE, newId, type Athlete, type Protocol } from './model/protocol'
 import { builtInProtocols } from './model/presets'
 import { protocolDurationS } from './model/protocol'
-import { TestRunner, type SessionRecord } from './model/session'
+import { TestRunner, type Environment, type SessionRecord } from './model/session'
 import { PowerMatch, ReferenceWatch } from './model/powermatch'
 import { describeProbe, runErgProbe, type TrainerResponse } from './ble/probe'
 import { formatClock, mmpCurve } from './model/metrics'
@@ -81,6 +81,14 @@ export default function App() {
   const [sensorsOpen, setSensorsOpen] = useState(false)
   const [tilesOpen, setTilesOpen] = useState(false)
   const [environmentOpen, setEnvironmentOpen] = useState(false)
+  /** The latest conditions anybody typed, for the form to reopen on and the tile to show. */
+  const [conditions, setConditions] = useState<Environment | null>(null)
+  /**
+   * Conditions entered before Start. There is no recording to put them in yet,
+   * and the room is usually measured while the athlete is still warming up, so
+   * they wait here and go in at the head of the journal when it opens.
+   */
+  const heldConditions = useRef<Environment[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [activeProtocol, setActiveProtocol] = useState<Protocol | null>(null)
   const [runner, setRunner] = useState<TestRunner | null>(null)
@@ -402,7 +410,12 @@ export default function App() {
       onStart: (startedAt) => {
         void recorder
           .begin(headerFor(id, activeProtocol, settings.athlete, startedAt))
-          .then(() => recordPowerSources())
+          .then(() => {
+            for (const { at, ...reading } of heldConditions.current.splice(0)) {
+              recorder.environment(0, reading, at)
+            }
+            recordPowerSources()
+          })
           .catch((error: unknown) =>
             setToast(`Recording did not start: ${error instanceof Error ? error.message : String(error)}`),
           )
@@ -560,6 +573,7 @@ export default function App() {
             onOpenSensors={() => setSensorsOpen(true)}
             onEditTiles={() => setTilesOpen(true)}
             onEditEnvironment={() => setEnvironmentOpen(true)}
+            conditions={conditions}
             onFinish={finish}
           />
         ) : (
@@ -630,10 +644,22 @@ export default function App() {
       {environmentOpen && (
         <EnvironmentForm
           metrics={manager.read()}
+          existing={conditions ?? undefined}
           onSave={(reading) => {
-            recorder.environment(runner?.elapsed ?? 0, reading)
+            const observed = { ...reading, at: Date.now() }
+            setConditions(observed)
             setEnvironmentOpen(false)
-            setToast('Conditions recorded with the session.')
+            const state = runner?.snapshot().state
+            if (runner && (state === 'running' || state === 'paused')) {
+              recorder.environment(runner.elapsed, reading)
+              setToast('Conditions recorded with the session.')
+            } else if (state === 'finished') {
+              // The recording is closed. Saying "recorded" here would be a lie.
+              setToast('This test has finished, so these were not recorded with it.')
+            } else {
+              heldConditions.current.push(observed)
+              setToast('Conditions noted. They go into the recording when the test starts.')
+            }
           }}
           onClose={() => setEnvironmentOpen(false)}
         />

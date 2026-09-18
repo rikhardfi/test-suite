@@ -1,6 +1,7 @@
 import type { SessionRecord, Sample } from './session'
 import type { Protocol } from './protocol'
 import { VO2_METHODS } from './vo2'
+import { waterContentOf } from './humidity'
 import type { JournalEvent, JournalRecord } from './journal'
 import type { FlowSidecar } from './flowExport'
 import { RESEARCH_COLUMNS, gridSidecar, type ResearchGrid } from './researchGrid'
@@ -285,17 +286,23 @@ export function researchSidecar(session: SessionRecord, options: SidecarOptions)
        * cold, dry or CO₂-loaded indoor air is a conditioning load the airway
        * carries, not context around the measurement.
        */
-      environment: (session.environment ?? []).map((reading) => ({
-        at: new Date(reading.at).toISOString(),
-        tempC: reading.tempC ?? null,
-        humidityPct: reading.humidityPct ?? null,
-        co2Ppm: reading.co2Ppm ?? null,
-        pressureHpa: reading.pressureHpa ?? null,
-        altitudeM: reading.altitudeM ?? null,
-        setting: reading.setting ?? null,
-        note: reading.note ?? null,
-        source: reading.source,
-      })),
+      environment: [...(session.environment ?? [])]
+        .sort((a, b) => a.at - b.at)
+        .map((reading) => {
+          const water = waterContentOf(reading)
+          return {
+            at: new Date(reading.at).toISOString(),
+            tempC: reading.tempC ?? null,
+            humidityPct: reading.humidityPct ?? null,
+            waterMgL: water == null ? null : Number(water.toFixed(2)),
+            co2Ppm: reading.co2Ppm ?? null,
+            pressureHpa: reading.pressureHpa ?? null,
+            altitudeM: reading.altitudeM ?? null,
+            setting: reading.setting ?? null,
+            note: reading.note ?? null,
+            source: reading.source,
+          }
+        }),
 
       methods: {
         vo2: Object.entries(VO2_METHODS).map(([key, info]) => ({
@@ -331,6 +338,8 @@ export function researchSidecar(session: SessionRecord, options: SidecarOptions)
         'incline_source and distance_source distinguish a measurement from an assumption.',
         'A blank cell means the metric was not reported, which is not the same as zero.',
         'Environment readings carry their own timestamps and are not resampled onto the 1 Hz clock.',
+        'waterMgL is derived, not measured: Buck saturation pressure and the ideal gas law for the vapour, in mg per litre of the air as it was (not BTPS, not dry gas). Barometric pressure does not enter.',
+        'Environment readings with source "import" come from a monitor\'s own log. Their times are that monitor\'s local clock read in the importing computer\'s time zone.',
       ],
     },
     null,

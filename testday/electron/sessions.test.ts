@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, truncateSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionStore, sessionDirName, verifyCopy } from './sessions'
+import { JournalWriter } from './journal'
 import { JOURNAL_VERSION, type JournalHeader, type JournalRecord } from '../src/model/journal'
 
 const STARTED_AT = new Date(2026, 7, 12, 7, 31, 0).getTime()
@@ -121,6 +122,28 @@ describe('SessionStore', () => {
     expect(summary.endedAt).toBeUndefined()
     // The original close record is still in the file: nothing was rewritten.
     expect(store.read('session_1')?.samples.map((s) => s.t)).toEqual([1, 2])
+  })
+
+  it('attaches conditions to a finished session without reopening it', () => {
+    const open = store.begin(header())
+    open.writer.append(sample(1))
+    open.writer.append({ type: 'closed', endedAt: STARTED_AT + 1000, sampleCount: 1 })
+    open.writer.close()
+    store.refreshMeta(open.dir)
+
+    // What the amendEnvironment handler does: a fresh writer on the closed
+    // journal, the readings appended, nothing rewritten.
+    const dir = store.dirFor('session_1')!
+    const writer = new JournalWriter(store.journalPath(dir))
+    writer.append({ type: 'environment', at: STARTED_AT + 500, t: 0.5, tempC: 21, humidityPct: 40, source: 'import' })
+    writer.append({ type: 'environment', at: STARTED_AT - 300000, t: -300, tempC: 20.8, humidityPct: 41, source: 'import' })
+    writer.close()
+    store.refreshMeta(dir)
+
+    const session = store.read('session_1')
+    expect(session?.environment?.map((e) => e.tempC)).toEqual([20.8, 21])
+    expect(session?.endedAt).toBe(STARTED_AT + 1000)
+    expect(store.list()[0].closed).toBe(true)
   })
 
   it('recovers a session whose journal was cut mid-write', () => {

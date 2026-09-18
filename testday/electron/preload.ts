@@ -34,6 +34,7 @@ const bridge: TestdayBridge = {
   unclosed: () => ipcRenderer.invoke(IPC.unclosed),
   resume: (id) => ipcRenderer.invoke(IPC.resume, id),
   amendLactate: (sessionId, entry) => ipcRenderer.invoke(IPC.amendLactate, sessionId, entry),
+  amendEnvironment: (sessionId, readings) => ipcRenderer.invoke(IPC.amendEnvironment, sessionId, readings),
   importSessions: (sessions) => ipcRenderer.invoke(IPC.importSessions, sessions),
   reveal: (id) => ipcRenderer.invoke(IPC.reveal, id),
 

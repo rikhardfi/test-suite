@@ -668,6 +668,30 @@ function registerHandlers(): void {
     return store.read(id)
   })
 
+  // Conditions from a monitor's own log, attached once the file is in hand,
+  // which is usually after the session has been closed. Appended like any
+  // other reading; each carries the time it was measured, and is sorted into
+  // place on read.
+  ipcMain.handle(
+    IPC.amendEnvironment,
+    (_event, id: string, readings: Omit<JournalEnvironment, 'type'>[]) => {
+      if (active?.id === id) {
+        for (const reading of readings) guardedAppend({ type: 'environment', ...reading })
+        return store.read(id)
+      }
+      const dir = store.dirFor(id)
+      if (!dir) return null
+      const writer = new JournalWriter(store.journalPath(dir))
+      try {
+        for (const reading of readings) writer.append({ type: 'environment', ...reading })
+      } finally {
+        writer.close()
+      }
+      store.refreshMeta(dir)
+      return store.read(id)
+    },
+  )
+
   ipcMain.handle(IPC.importSessions, (_event, sessions: SessionRecord[]) => {
     let imported = 0
     for (const record of sessions) {

@@ -24,6 +24,8 @@ import { flowRows, flowSidecar, withExhaled } from '../model/flowExport'
 import { buildResearchGrid } from '../model/researchGrid'
 import { parseCartCsv, ventilatoryThresholds, type VentilatoryResult } from '../model/ventilatory'
 import { APP_VERSION } from '../model/version'
+import { parseAranetFile, readingsForSession } from '../model/aranet'
+import { waterContentOf } from '../model/humidity'
 
 export function Analysis({
   protocols,
@@ -122,6 +124,15 @@ export function Analysis({
             if (updated) setSession(updated)
             await refresh()
           }}
+          onConditions={async (file) => {
+            const imported = await parseAranetFile(new Uint8Array(await file.arrayBuffer()))
+            const picked = readingsForSession(imported, session, file.name)
+            if (picked.add.length) {
+              const updated = await recorder.amendEnvironment(session, picked.add)
+              if (updated) setSession(updated)
+            }
+            return [picked.message, ...imported.problems.filter((p) => p !== picked.message)].join(' ')
+          }}
           onDelete={async () => {
             await recorder.discard(session.id)
             setSelectedId(null)
@@ -136,11 +147,92 @@ export function Analysis({
   )
 }
 
+/**
+ * The room the test was run in, reading by reading, with the water each litre
+ * of it carried. Imported readings sit in the same table as typed and sensed
+ * ones, told apart by their source and by nothing else.
+ */
+function ConditionsPanel({
+  session,
+  onImport,
+}: {
+  session: SessionRecord
+  onImport: (file: File) => Promise<string>
+}) {
+  const [message, setMessage] = useState<string | null>(null)
+  const readings = session.environment ?? []
+  const clock = (at: number) =>
+    new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const cell = (value: number | null | undefined, digits: number) =>
+    value == null ? '' : value.toFixed(digits)
+
+  return (
+    <section className="panel span-2">
+      <div className="panel-head">
+        <span className="muted">Conditions</span>
+      </div>
+      {readings.length > 0 ? (
+        <div className="table-scroll">
+          <table className="results">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Source</th>
+                <th>°C</th>
+                <th>RH %</th>
+                <th>Water mg/L</th>
+                <th>CO₂ ppm</th>
+                <th>hPa</th>
+              </tr>
+            </thead>
+            <tbody>
+              {readings.map((reading, i) => (
+                <tr key={`${reading.at}-${i}`} title={reading.note}>
+                  <td>{clock(reading.at)}</td>
+                  <td>{reading.source}</td>
+                  <td>{cell(reading.tempC, 1)}</td>
+                  <td>{cell(reading.humidityPct, 0)}</td>
+                  <td>{cell(waterContentOf(reading), 1)}</td>
+                  <td>{cell(reading.co2Ppm, 0)}</td>
+                  <td>{cell(reading.pressureHpa, 1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="muted small pad">
+          No conditions were recorded with this session. A result without them cannot be read properly a year later.
+        </p>
+      )}
+      <div className="pad">
+        <label className="check">
+          <input
+            type="file"
+            accept=".xlsx,.csv,text/csv"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (!file) return
+              onImport(file).then(setMessage, (error: unknown) =>
+                setMessage(`Not imported: ${error instanceof Error ? error.message : String(error)}`),
+              )
+            }}
+          />
+          Import an Aranet4 log (the .xlsx or .csv the Aranet Home app exports) to attach the room's readings
+        </label>
+        {message && <p className="muted small">{message}</p>}
+      </div>
+    </section>
+  )
+}
+
 function SessionDetail({
   session,
   protocols,
   salt,
   onLactate,
+  onConditions,
   onResume,
   onDelete,
 }: {
@@ -148,6 +240,8 @@ function SessionDetail({
   protocols: Protocol[]
   salt: string
   onLactate: (entry: LactateEntry) => void | Promise<void>
+  /** Reads a monitor's log, attaches what belongs to this session, and says what it did. */
+  onConditions: (file: File) => Promise<string>
   onResume: () => void
   onDelete: () => void
 }) {
@@ -446,6 +540,8 @@ function SessionDetail({
             </div>
           </dl>
         </section>
+
+        <ConditionsPanel session={session} onImport={onConditions} />
 
         <section className="panel span-2">
           <div className="panel-head">

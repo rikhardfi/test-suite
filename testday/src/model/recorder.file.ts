@@ -2,6 +2,7 @@ import type { TestdayBridge } from '../../electron/ipc'
 import type { JournalEventKind, JournalHeader } from './journal'
 import type { LactateEntry, Sample } from './session'
 import type { FinishResult, Recorder, RecorderStatus } from './recorder'
+import { protocolClock } from './flowExport'
 
 /**
  * Desktop recording. Each sample crosses to the main process and is appended to
@@ -89,8 +90,8 @@ export function createFileRecorder(bridge: TestdayBridge): Recorder {
       queue(() => bridge.appendRr({ at, t, ms: intervalsMs }))
     },
 
-    environment(t: number, reading) {
-      const at = Date.now()
+    environment(t: number, reading, observedAt) {
+      const at = observedAt ?? Date.now()
       queue(() => bridge.appendEnvironment({ ...reading, at, t }))
     },
 
@@ -133,6 +134,18 @@ export function createFileRecorder(bridge: TestdayBridge): Recorder {
     },
 
     amendLactate: (sessionId, entry) => bridge.amendLactate(sessionId, entry),
+    amendEnvironment: (session, readings) => {
+      const clock = protocolClock(session.events)
+      return bridge.amendEnvironment(
+        session.id,
+        readings.map((reading) => ({
+          ...reading,
+          // Where the protocol clock stood, or how far off the start it was
+          // when the reading falls outside the session on either side.
+          t: Number((clock(reading.at).elapsedS ?? (reading.at - session.startedAt) / 1000).toFixed(2)),
+        })),
+      )
+    },
 
     onStatus(listener) {
       listeners.add(listener)

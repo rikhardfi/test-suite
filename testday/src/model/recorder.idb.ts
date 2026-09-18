@@ -113,8 +113,8 @@ export function createIdbRecorder(): Recorder {
       rr.push({ t, ms: intervalsMs })
     },
 
-    environment(_t: number, reading) {
-      environment.push({ ...reading, at: Date.now() })
+    environment(_t: number, reading, observedAt) {
+      environment.push({ ...reading, at: observedAt ?? Date.now() })
     },
 
     async finish(endedAt: number): Promise<FinishResult> {
@@ -178,6 +178,14 @@ export function createIdbRecorder(): Recorder {
       const existing = session.lactate.findIndex((l) => l.stepIndex === entry.stepIndex)
       if (existing >= 0) session.lactate[existing] = entry
       else session.lactate.push(entry)
+      await saveSession(session)
+      return session
+    },
+
+    async amendEnvironment(target: SessionRecord, readings: Environment[]) {
+      const session = await loadSession(target.id)
+      if (!session) return null
+      session.environment = [...(session.environment ?? []), ...readings].sort((a, b) => a.at - b.at)
       await saveSession(session)
       return session
     },

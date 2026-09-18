@@ -34,6 +34,7 @@ export const IPC = {
   unclosed: 'testday:unclosed',
   resume: 'testday:resume',
   amendLactate: 'testday:amend-lactate',
+  amendEnvironment: 'testday:amend-environment',
   importSessions: 'testday:import-sessions',
   reveal: 'testday:reveal',
   library: 'testday:library',
@@ -141,6 +142,10 @@ export interface TestdayBridge {
   unclosed(): Promise<SessionSummary[]>
   resume(id: string): Promise<ResumeResult | null>
   amendLactate(sessionId: string, entry: LactateEntry): Promise<SessionRecord | null>
+  amendEnvironment(
+    sessionId: string,
+    readings: Omit<JournalEnvironment, 'type'>[],
+  ): Promise<SessionRecord | null>
   importSessions(sessions: SessionRecord[]): Promise<number>
   reveal(id: string | null): Promise<void>
 

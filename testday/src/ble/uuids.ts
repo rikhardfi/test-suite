@@ -8,6 +8,17 @@ export const SVC = {
   fitnessMachine: 0x1826,
   battery: 0x180f,
   deviceInformation: 0x180a,
+  environmentalSensing: 0x181a,
+} as const
+
+/**
+ * Environmental Sensing Service. The SIG's own profile for a room sensor, so
+ * any monitor that implements it works without the app knowing its maker.
+ */
+export const ESS_CHR = {
+  pressure: 0x2a6d,
+  temperature: 0x2a6e,
+  humidity: 0x2a6f,
 } as const
 
 /**

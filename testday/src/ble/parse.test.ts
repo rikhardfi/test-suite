@@ -4,6 +4,9 @@ import {
   parseCoreTemperature,
   parseCsc,
   parseCyclingPower,
+  parseEssHumidity,
+  parseEssPressure,
+  parseEssTemperature,
   parseHeartRate,
   parseIndoorBikeData,
   parseRsc,
@@ -225,5 +228,24 @@ describe('parseCoreTemperature', () => {
   it('does not read past a truncated packet', () => {
     // Flags claim skin and HSI, but the payload stops after the core value.
     expect(parseCoreTemperature(view(0x21, ...le16(3700)))).toEqual({ coreTempC: 37 })
+  })
+})
+
+describe('the standard environmental sensor', () => {
+  const le32 = (n: number) => [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >>> 24) & 0xff]
+
+  it('reads temperature, humidity and pressure in their own units', () => {
+    expect(parseEssTemperature(view(...le16(2134)))).toEqual({ ambientTempC: 21.34 })
+    // Signed: a cold room, or a ski tunnel, is below zero.
+    expect(parseEssTemperature(view(...le16(0x10000 - 850)))).toEqual({ ambientTempC: -8.5 })
+    expect(parseEssHumidity(view(...le16(4250)))).toEqual({ humidityPct: 42.5 })
+    expect(parseEssPressure(view(...le32(1003250)))).toEqual({ pressureHpa: 1003.25 })
+  })
+
+  it('drops the values that mean the sensor does not know', () => {
+    expect(parseEssTemperature(view(...le16(0x8000)))).toEqual({})
+    expect(parseEssHumidity(view(...le16(0xffff)))).toEqual({})
+    expect(parseEssPressure(view(...le32(0xffffffff)))).toEqual({})
+    expect(parseEssPressure(view(0x01))).toEqual({})
   })
 })

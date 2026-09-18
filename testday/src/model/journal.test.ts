@@ -141,6 +141,28 @@ describe('session state', () => {
     expect(session?.samples.map((s) => s.t)).toEqual([1, 2])
   })
 
+  // A monitor's log imported afterwards is written at the end of the journal
+  // and was measured in the middle of the session.
+  it('puts conditions in the order they were measured, not the order they were written', () => {
+    const session = recordsToSession([
+      header(),
+      { type: 'environment', at: 3000, t: 3, tempC: 22, humidityPct: 45, source: 'manual' },
+      { type: 'closed', endedAt: 10, sampleCount: 0 },
+      { type: 'environment', at: 1000, t: 1, tempC: 21, humidityPct: 40, co2Ppm: 600, source: 'import', note: 'log.xlsx' },
+    ])
+    expect(session?.environment?.map((e) => e.at)).toEqual([1000, 3000])
+    expect(session?.environment?.[0]).toEqual({
+      at: 1000,
+      tempC: 21,
+      humidityPct: 40,
+      co2Ppm: 600,
+      source: 'import',
+      note: 'log.xlsx',
+    })
+    // Attaching conditions does not reopen a finished session.
+    expect(session?.endedAt).toBe(10)
+  })
+
   it('restores the end time when the reopened session is closed again', () => {
     const session = recordsToSession([
       header(),

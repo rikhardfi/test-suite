@@ -1,10 +1,13 @@
-import { ARANET_CHR, ARANET_SVC, CHR, CORE_CHR, CORE_SVC, SVC } from './uuids'
+import { ARANET_CHR, ARANET_SVC, CHR, CORE_CHR, CORE_SVC, ESS_CHR, SVC } from './uuids'
 import {
   RevolutionCounter,
   parseAranet,
   parseCoreTemperature,
   parseCsc,
   parseCyclingPower,
+  parseEssHumidity,
+  parseEssPressure,
+  parseEssTemperature,
   parseHeartRate,
   parseIndoorBikeData,
   parseRsc,
@@ -112,6 +115,15 @@ export const SENSOR_PROFILES: readonly SensorProfile[] = [
     // about the firmware in front of you.
     mayRequirePairing: true,
   },
+  {
+    key: 'ess',
+    label: 'Room sensor (standard)',
+    hint: 'Any sensor with the Bluetooth Environmental Sensing service: temperature, humidity, pressure',
+    kind: 'environment',
+    service: SVC.environmentalSensing,
+    provides: ['ambientTempC', 'humidityPct', 'pressureHpa'],
+    channel: 'environment',
+  },
 ]
 
 /**
@@ -148,6 +160,9 @@ const KIND_PRIORITY: Record<MetricKey, DeviceKind[]> = {
   humidityPct: ['environment', 'mock'],
   pressureHpa: ['environment', 'mock'],
 }
+
+/** How often a standard environmental sensor is read. */
+const ENVIRONMENT_POLL_S = 60
 
 /** How long beat intervals are kept for a rolling variability window. */
 const RR_HISTORY_MS = 5 * 60 * 1000
@@ -722,6 +737,10 @@ export class SensorManager {
         await this.openFtms(entry, service)
         break
 
+      case 'ess':
+        await this.pollEnvironment(entry, service)
+        break
+
       case 'aranet': {
         // Notify where the firmware offers it, and fall back to polling on the
         // device's own measurement interval. Polling is not a workaround here:
@@ -738,6 +757,51 @@ export class SensorManager {
     }
 
     void this.readBattery(entry, server)
+  }
+
+  /**
+   * Reads a standard environmental sensor once a minute, all of it at once.
+   *
+   * Temperature, humidity and pressure are three characteristics, and a sensor
+   * that notifies does so for each separately and as often as it likes. Taken
+   * that way a reading would arrive in thirds, and the record would fill with
+   * rows holding a temperature and no humidity, which is no use to anything
+   * that needs both. A room does not change in a minute, so they are read
+   * together on a slow clock and recorded as one observation.
+   */
+  private async pollEnvironment(entry: Entry, service: BluetoothRemoteGATTService): Promise<void> {
+    const sources: [number, (view: DataView) => MetricUpdate][] = [
+      [ESS_CHR.temperature, parseEssTemperature],
+      [ESS_CHR.humidity, parseEssHumidity],
+      [ESS_CHR.pressure, parseEssPressure],
+    ]
+    const readable: { chr: BluetoothRemoteGATTCharacteristic; parse: (view: DataView) => MetricUpdate }[] = []
+    for (const [uuid, parse] of sources) {
+      try {
+        readable.push({ chr: await service.getCharacteristic(uuid), parse })
+      } catch {
+        // A sensor need not measure all three.
+      }
+    }
+    if (!readable.length) {
+      throw new Error('This sensor offers the environmental service but no temperature, humidity or pressure in it.')
+    }
+
+    const read = async () => {
+      if (!this.entries.has(entry.device.id)) return
+      const update: MetricUpdate = {}
+      for (const { chr, parse } of readable) {
+        try {
+          Object.assign(update, parse(await chr.readValue()))
+        } catch {
+          // One failed read leaves the others standing.
+        }
+      }
+      if (Object.keys(update).length) this.ingest(entry.device.id, update)
+    }
+
+    await read()
+    entry.pollTimer = setInterval(() => void read(), ENVIRONMENT_POLL_S * 1000)
   }
 
   /**

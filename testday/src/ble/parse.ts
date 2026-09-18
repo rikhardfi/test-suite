@@ -356,6 +356,29 @@ export function parseCoreTemperature(view: DataView): MetricUpdate {
 const round2 = (n: number): number => Math.round(n * 100) / 100
 
 /**
+ * Environmental Sensing Service characteristics, little endian: temperature as
+ * sint16 in 0.01 °C, humidity as uint16 in 0.01 %, pressure as uint32 in 0.1 Pa.
+ * Each has a reserved "not known" value, which is dropped rather than recorded.
+ */
+export function parseEssTemperature(view: DataView): MetricUpdate {
+  if (view.byteLength < 2) return {}
+  const raw = view.getInt16(0, true)
+  return raw === -0x8000 ? {} : { ambientTempC: round2(raw * 0.01) }
+}
+
+export function parseEssHumidity(view: DataView): MetricUpdate {
+  if (view.byteLength < 2) return {}
+  const raw = view.getUint16(0, true)
+  return raw === 0xffff || raw > 10000 ? {} : { humidityPct: round2(raw * 0.01) }
+}
+
+export function parseEssPressure(view: DataView): MetricUpdate {
+  if (view.byteLength < 4) return {}
+  const raw = view.getUint32(0, true)
+  return raw === 0xffffffff || raw === 0 ? {} : { pressureHpa: round2(raw / 1000) }
+}
+
+/**
  * Aranet4 current readings.
  *
  * Layout, little endian: CO₂ ppm (uint16), temperature in 0.05 °C steps

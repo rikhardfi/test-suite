@@ -9,6 +9,6 @@
  * oxygen estimate is the result of choices in the code, and knowing which code
  * made it is the difference between reproducible and merely repeatable.
  */
-export const APP_VERSION = '0.1.0'
+export const APP_VERSION = '0.2.0'
 
 export const APP_NAME = 'testday'

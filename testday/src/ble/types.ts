@@ -28,6 +28,18 @@ export type MetricKey =
   /** Ventilation wearable: breaths per minute. */
   | 'breathingRate'
   /**
+   * TSI flow meter on the one-way expiratory limb: mean exhaled flow over the
+   * last quarter second (Std L/min, dry-gas equivalent), gas temperature and
+   * RH in the meter, its running volume (L), and breathing-circuit pressure.
+   * Named apart from the environment keys, which are recorded on their own
+   * slow channel and would otherwise catch these.
+   */
+  | 'expFlowLMin'
+  | 'expTempC'
+  | 'expHumidityPct'
+  | 'expTotalL'
+  | 'flowLowPressureCmH2O'
+  /**
    * Environment monitor. These move on a scale of minutes, not seconds, and are
    * recorded on their own clock rather than sampled onto the 1 Hz series.
    */
@@ -62,6 +74,7 @@ export type DeviceKind =
   | 'coreTemp'
   | 'ventilation'
   | 'environment'
+  | 'flowMeter'
   | 'mock'
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'

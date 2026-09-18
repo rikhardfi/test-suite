@@ -13,6 +13,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { JournalWriter, readJournalFile } from './journal'
+import { FLOW_FILE } from '../src/model/flow'
 import {
   isClosed,
   lastSampleTime,
@@ -242,6 +243,18 @@ export class SessionStore {
       if (existsSync(metaPath)) copyDurable(readFileSync(metaPath), join(target, META_FILE))
 
       const verdict = verifyCopy(source, join(target, JOURNAL_FILE))
+
+      // The flow meter's waveform, when there is one, is part of the session and
+      // gets the same verified copy. A mirror missing it is not a good mirror.
+      const flowPath = join(dir, FLOW_FILE)
+      if (verdict.ok && existsSync(flowPath)) {
+        const flowSource = readFileSync(flowPath)
+        copyDurable(flowSource, join(target, FLOW_FILE))
+        const flowVerdict = verifyCopy(flowSource, join(target, FLOW_FILE))
+        if (!flowVerdict.ok) {
+          return { ...flowVerdict, target, error: `${FLOW_FILE}: ${flowVerdict.error}` }
+        }
+      }
       return { ...verdict, target }
     } catch (error) {
       return {

@@ -450,6 +450,58 @@ export function fitLaps(samples: readonly Sample[]): FitLap[] {
   return laps
 }
 
+/**
+ * The altitude trace, one metre value per sample, relative to the start.
+ *
+ * A treadmill has no altimeter, so vertical metres only exist as the gradient
+ * integrated over the distance covered. Computing the whole trace up front,
+ * rather than accumulating it inside the record loop, is what lets the lap and
+ * session summaries report an ascent that agrees with the altitude field they
+ * summarise instead of being a second estimate arrived at a different way.
+ */
+export function fitAltitudes(samples: readonly Sample[]): Map<Sample, number> {
+  const altitudes = new Map<Sample, number>()
+  let climbM = 0
+  let previousDistance = 0
+  for (const sample of samples) {
+    const distance = sample.distanceM ?? previousDistance
+    if (sample.inclinePct != null && distance > previousDistance) {
+      climbM += (distance - previousDistance) * (sample.inclinePct / 100)
+    }
+    previousDistance = distance
+    altitudes.set(sample, climbM)
+  }
+  return altitudes
+}
+
+/**
+ * Vertical metres up and down over a stretch of the trace: the positive and
+ * negative parts of the change between consecutive samples, both reported as
+ * positive numbers, which is how FIT stores them.
+ *
+ * `from` is the altitude at the sample before the stretch, so a lap is charged
+ * for the metres climbed across the boundary into it and the laps add up to
+ * the session rather than losing a step each.
+ */
+export function climbOver(
+  samples: readonly Sample[],
+  altitudes: Map<Sample, number>,
+  from = 0,
+): { ascentM: number; descentM: number } {
+  let ascentM = 0
+  let descentM = 0
+  let previous = from
+  for (const sample of samples) {
+    const altitude = altitudes.get(sample)
+    if (altitude == null) continue
+    const change = altitude - previous
+    if (change > 0) ascentM += change
+    else descentM -= change
+    previous = altitude
+  }
+  return { ascentM, descentM }
+}
+
 const pluck = (samples: readonly Sample[], key: keyof Sample): number[] => {
   const out: number[] = []
   for (const sample of samples) {
@@ -504,6 +556,11 @@ export function sessionToFit(session: SessionRecord, options: FitOptions = {}): 
   const startTime = toFitTime(session.startedAt)
   const samples = session.samples
   const laps = fitLaps(samples)
+  const altitudes = fitAltitudes(samples)
+  // Without a gradient anywhere there is no vertical information at all, and
+  // the ascent fields are left absent rather than written as a zero. A zero
+  // here is a measurement: it says the athlete ran flat.
+  const hasGradient = samples.some((sample) => sample.inclinePct != null)
   const massKg = session.athlete.massKg || 75
   const sport = SPORT[session.sport]
   const subSport = SUB_SPORT[session.sport]
@@ -613,17 +670,7 @@ export function sessionToFit(session: SessionRecord, options: FitOptions = {}): 
     recordDev.map((field) => ({ spec: devSpec(field), index: DEVELOPER_DATA_INDEX })),
   )
 
-  let climbM = 0
-  let previousDistance = 0
   for (const sample of samples) {
-    const distance = sample.distanceM ?? previousDistance
-    // Vertical metres accumulated from the gradient over the distance covered,
-    // which is the only way an altitude trace exists for a treadmill at all.
-    if (sample.inclinePct != null && distance > previousDistance) {
-      climbM += (distance - previousDistance) * (sample.inclinePct / 100)
-    }
-    previousDistance = distance
-
     encoder.data(
       LOCAL.record,
       {
@@ -634,7 +681,7 @@ export function sessionToFit(session: SessionRecord, options: FitOptions = {}): 
         6: sample.speedMs,
         7: sample.power,
         9: sample.inclinePct,
-        2: climbM,
+        2: altitudes.get(sample),
       },
       recordDevValues(sample, recordDev),
     )
@@ -660,6 +707,13 @@ export function sessionToFit(session: SessionRecord, options: FitOptions = {}): 
       { num: 17, type: BASE.uint8 }, // avg_cadence
       { num: 19, type: BASE.uint16 }, // avg_power
       { num: 20, type: BASE.uint16 }, // max_power
+      // The lap numbers them one lower than the session does: 21 and 22 here,
+      // 22 and 23 there, because the session carries an avg_power at 20 and a
+      // max_power at 21 where the lap has them at 19 and 20. Reading these off
+      // the session's row is exactly the mistake `verify_fit.py` exists to
+      // catch, and it would decode as a plausible power rather than as junk.
+      { num: 21, type: BASE.uint16 }, // total_ascent, m
+      { num: 22, type: BASE.uint16 }, // total_descent, m
       { num: 25, type: BASE.enum }, // sport
       { num: 0, type: BASE.enum }, // event
       { num: 1, type: BASE.enum }, // event_type
@@ -667,6 +721,9 @@ export function sessionToFit(session: SessionRecord, options: FitOptions = {}): 
     lapDev.map((field) => ({ spec: devSpec(field), index: DEVELOPER_DATA_INDEX })),
   )
 
+  // Carried across the laps so each is charged for the climb on the interval
+  // into it, and the lap ascents sum to the session's.
+  let previousAltitude = 0
   laps.forEach((lap, index) => {
     const power = pluck(lap.samples, 'power')
     const hr = pluck(lap.samples, 'heartRate')
@@ -676,6 +733,8 @@ export function sessionToFit(session: SessionRecord, options: FitOptions = {}): 
     const lapDistance = distances.length ? distances[distances.length - 1] - distances[0] : undefined
     const lactate = session.lactate.find((l) => l.stepIndex === lap.stepIndex && !l.removed)
     const duration = lap.endS - lap.startS + 1
+    const climb = climbOver(lap.samples, altitudes, previousAltitude)
+    previousAltitude = altitudes.get(lap.samples[lap.samples.length - 1]) ?? previousAltitude
 
     encoder.data(
       LOCAL.lap,
@@ -694,6 +753,8 @@ export function sessionToFit(session: SessionRecord, options: FitOptions = {}): 
         17: cadence.length ? Math.round(mean(cadence)) : undefined,
         19: power.length ? Math.round(mean(power)) : undefined,
         20: power.length ? Math.round(max(power)) : undefined,
+        21: hasGradient ? Math.round(climb.ascentM) : undefined,
+        22: hasGradient ? Math.round(climb.descentM) : undefined,
         25: sport,
         0: 9, // lap
         1: 1, // stop
@@ -731,13 +792,17 @@ export function sessionToFit(session: SessionRecord, options: FitOptions = {}): 
     { num: 16, type: BASE.uint8 },
     { num: 17, type: BASE.uint8 },
     { num: 18, type: BASE.uint8 },
-    { num: 20, type: BASE.uint16 },
-    { num: 21, type: BASE.uint16 },
+    { num: 20, type: BASE.uint16 }, // avg_power
+    { num: 21, type: BASE.uint16 }, // max_power
+    { num: 22, type: BASE.uint16 }, // total_ascent, m
+    { num: 23, type: BASE.uint16 }, // total_descent, m
     { num: 25, type: BASE.uint16 },
     { num: 26, type: BASE.uint16 },
     { num: 0, type: BASE.enum },
     { num: 1, type: BASE.enum },
   ])
+  const totalClimb = climbOver(samples, altitudes)
+
   encoder.data(LOCAL.session, {
     253: timeAt(lastT),
     254: 0,
@@ -755,6 +820,8 @@ export function sessionToFit(session: SessionRecord, options: FitOptions = {}): 
     18: allCadence.length ? Math.round(mean(allCadence)) : undefined,
     20: allPower.length ? Math.round(mean(allPower)) : undefined,
     21: allPower.length ? Math.round(max(allPower)) : undefined,
+    22: hasGradient ? Math.round(totalClimb.ascentM) : undefined,
+    23: hasGradient ? Math.round(totalClimb.descentM) : undefined,
     25: 0,
     26: laps.length,
     0: 8, // session

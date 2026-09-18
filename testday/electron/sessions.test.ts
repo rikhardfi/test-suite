@@ -174,6 +174,18 @@ describe('mirroring', () => {
     expect(existsSync(join(result.target, 'meta.json'))).toBe(true)
   })
 
+  it('copies the flow meter file with the journal, verified the same way', () => {
+    const open = store.begin(header())
+    open.writer.append({ type: 'closed', endedAt: STARTED_AT + 5000, sampleCount: 0 })
+    open.writer.close()
+    writeFileSync(join(open.dir, 'flow.ndjson'), '{"type":"block","seg":0}\n')
+
+    const result = store.mirror('session_1', join(root, 'OneDrive'))
+
+    expect(result.ok).toBe(true)
+    expect(existsSync(join(result.target, 'flow.ndjson'))).toBe(true)
+  })
+
   it('reports a missing session rather than claiming a copy was made', () => {
     const result = store.mirror('nope', join(root, 'OneDrive'))
     expect(result.ok).toBe(false)

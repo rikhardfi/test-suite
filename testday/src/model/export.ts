@@ -44,6 +44,10 @@ export function sampleRow(s: Sample): (string | number)[] {
     s.commandedPower ?? '',
     s.powerMatchFactor ?? '',
     s.powerMatchHeld ? 1 : '',
+    s.exhaledFlowLMin?.toFixed(3) ?? '',
+    s.exhaledGasTempC?.toFixed(2) ?? '',
+    s.exhaledRhPct?.toFixed(1) ?? '',
+    s.exhaledCoverage?.toFixed(2) ?? '',
   ]
 }
 
@@ -100,6 +104,11 @@ export const sessionToJson = (session: SessionRecord): string => JSON.stringify(
 
 export function download(filename: string, content: string, mime: string): void {
   downloadBlob(filename, new Blob([content], { type: mime }))
+}
+
+/** Text built in pieces, so a long high-rate export is never one giant string. */
+export function downloadParts(filename: string, parts: string[], mime: string): void {
+  downloadBlob(filename, new Blob(parts, { type: mime }))
 }
 
 /** The same, for a binary format. FIT is bytes, not text. */

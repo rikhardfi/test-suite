@@ -8,6 +8,7 @@ import { TilePicker } from './ui/TilePicker'
 import { EnvironmentForm } from './ui/EnvironmentForm'
 import { Settings } from './ui/Settings'
 import { SensorManager } from './ble/manager'
+import { FLOW_METER_ID } from './ble/flowMeter'
 import { DEFAULT_ATHLETE, newId, type Athlete, type Protocol } from './model/protocol'
 import { builtInProtocols } from './model/presets'
 import { protocolDurationS } from './model/protocol'
@@ -182,6 +183,9 @@ export default function App() {
   useEffect(() => {
     if (!status.recording || !runner) return
     const stopMetrics = manager.onMetric((deviceId, update) => {
+      // The flow meter's updates are a quarter-second summary for the tiles;
+      // its measurement is written in full to flow.ndjson by the recorder.
+      if (deviceId === FLOW_METER_ID) return
       const { rrIntervalsMs, ...values } = update
       const t = Number(runner.elapsed.toFixed(2))
       if (Object.keys(values).length > 0) recorder.raw(deviceId, t, values)

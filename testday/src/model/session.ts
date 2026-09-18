@@ -82,6 +82,17 @@ export interface Sample {
   coreQuality?: number
   /** 0 HRM unsupported, 1 supported but not receiving, 2 receiving. */
   coreHrmState?: number
+  /**
+   * TSI flow meter, summarised onto this second at export time from
+   * `flow.ndjson` (see `withExhaled`); never recorded here. Means over the
+   * second of protocol time ending at `t`. Humidity is absent for a second
+   * containing a saturated reading, and coverage is the share of the second
+   * the meter actually sent.
+   */
+  exhaledFlowLMin?: number
+  exhaledGasTempC?: number
+  exhaledRhPct?: number
+  exhaledCoverage?: number
 }
 
 export interface LactateEntry {

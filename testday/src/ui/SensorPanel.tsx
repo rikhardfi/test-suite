@@ -7,6 +7,7 @@ import { metricLabel } from '../ble/metrics'
 import type { MetricKey } from '../ble/types'
 import { Modal } from './Modal'
 import { describeProbe, type TrainerResponse } from '../ble/probe'
+import { FlowMeterSection } from './FlowMeterSection'
 
 
 const SOURCE_METRICS: { key: MetricKey; label: string }[] = [
@@ -162,6 +163,8 @@ export function SensorPanel({
           </button>
         </div>
 
+        <FlowMeterSection manager={manager} />
+
         <h3>Raw capture</h3>
         <p className="muted small">
           Records the bytes a sensor sends, without interpreting them. This is how a parser gets
@@ -224,7 +227,12 @@ export function SensorPanel({
                         {device.state === 'reconnecting' ? 'Reconnecting…' : 'Retry'}
                       </button>
                     )}
-                    <button className="ghost" onClick={() => manager.remove(device.id)}>
+                    <button
+                      className="ghost"
+                      // A wired device has a connection of its own to close; the
+                      // manager only knows how to let go of Bluetooth ones.
+                      onClick={() => (device.kind === 'flowMeter' ? device.disconnect() : manager.remove(device.id))}
+                    >
                       Remove
                     </button>
                   </td>

@@ -6,7 +6,8 @@ mean-maximal curve out the other end.
 
 It runs as a **desktop app**, which is what lets a recording be written to a file as it happens rather
 than held in a browser tab that can be closed. Nothing leaves the machine: no account, no server, no
-upload, and no network requests at all. The same code still runs in a browser for demos and rehearsals,
+upload, and no internet requests at all (the one wired device, the TSI flow meter, is a USB cable that
+shows up as a private link to the meter). The same code still runs in a browser for demos and rehearsals,
 with the weaker storage that implies.
 
 ## What it does
@@ -87,6 +88,74 @@ rehearse a protocol before the athlete is on the bike.
 against it, reproducing a measured session rather than an invented one. It is the way to watch the
 power correction below do its job with no hardware in the room.
 
+## TSI flow meter (wired)
+
+A TSI 5300-series gas flow meter (tested on a 5330) on the one-way **expiratory** limb records exhaled
+flow, gas temperature, relative humidity, absolute and circuit pressure, and the meter's running
+volume. Desktop app only. Sensors → **TSI flow meter** → Connect.
+
+**How it connects.** The meter's USB-C port is a network adapter: macOS gives the Mac a link-local
+address on a /30 and the meter listens on TCP 3607 for TSI's documented ASCII command set
+(P/N 6011697). No TSI software and no driver. The address is found automatically; type one only if
+two meters are plugged in. An address that was typed is the only one tried.
+
+**What is recorded.** Every row, at the chosen interval (1 to 100 ms, default 10 ms), goes straight
+from the recording process to `flow.ndjson` in the session folder, in one-second blocks. The rows
+never cross to the interface, which gets a summary four times a second for the tiles. The journal
+gets an event for the meter's identity and for each command sent to it.
+
+**Time.** Rows reach the computer in bursts, tens of milliseconds late and by a varying amount, so
+arrival time is not when a row was measured. The meter samples on a fixed interval, so each 30 s
+segment is anchored at the earliest time consistent with every arrival in it (`min(arrival − i·dt)`),
+and row *i* is at `anchor + i·dt`. What remains is the ~1 ms network transport and the meter's own
+averaging window. Re-anchoring every segment absorbs drift between the meter's clock and the Mac's.
+
+**Gaps.** One stream command on the meter lasts exactly 30 s. The next is queued before the current
+one ends, but the meter still needs about 0.1 s to restart. Those rows do not exist. Each `segment`
+record says how many samples and milliseconds were lost and, from the meter's totalizer (which keeps
+counting while nothing is sent), how much volume passed meanwhile. Zeroing or resetting stops the
+stream for about half a second, recorded the same way.
+
+**Controls.** *Zero pressure* zeroes the circuit-pressure sensor: no flow, ports open to the room.
+*Reset volume* restarts the totalizer. The sample rate cannot change while a session is recording.
+
+**Known limits of the meter, stated where they apply.**
+- Direction sensing is off: reverse flow reads positive. Correct for a one-way limb, wrong for anything else.
+- Flow is Std L/min of dry gas (21.11 °C, 101.3 kPa, humidity-compensated), not BTPS.
+- The humidity sensor responds over seconds. It gives the trend across breaths, never within one.
+- At 100 % RH water is condensing, and the reading means nothing. The panel says so and the tile blanks it.
+- TSI states these meters are not medical devices and are not intended for human respiration measurements.
+
+```
+flow.ndjson   {"type":"meter", …}      identity and settings
+              {"type":"block", "seg", "i0", "at0", "dt", "f", "tc", "p", "rh", "lp", "tot"}
+              {"type":"segment", "seg", "anchorAt", "n", "dt", "start", "gapBefore": {samples, ms, volumeL}}
+              {"type":"command", "command", "ok", …}
+```
+
+**Hardware check without the app.** `python3 tools/tsi5330.py info` prints the meter's identity and
+settings over the same link; `record --rate 10 --duration 30` streams to a CSV. Python standard library only.
+
+`at0` in a block is provisional; re-time rows from their segment's `anchorAt`. The research export
+already does this.
+
+**Analysis** lives in the ventilation project (`ventilation_code`, Data > TSI breaths, `R/tsi.R`):
+import a research export there for breath detection, per-breath energy and water, and the check of
+whether the sensors reached room air.
+
+**Exports.** *Research export* writes one pseudonymised CSV on a **uniform time grid at the rate of
+the fastest device** in the session (100 Hz with the TSI at 10 ms; 1 Hz when nothing is faster),
+starting at the session start, plus its sidecar. Every measurement sits in the one row nearest the
+moment it was taken and nowhere else: a 1 Hz heart rate appears once a second with blank rows
+between, because those rows were not measured. Protocol state (step, phase, targets) is carried on
+every row. Nothing is held or interpolated. Native-rate notifications are the source where the
+journal has them, from the device that owned the metric at the time; otherwise the 1 Hz snapshot is
+placed at its own second. The sidecar's `sampling` section gives the rate, every source with its
+native interval, where each column came from, and what fell outside the grid; its `flowMeter`
+section gives the meter, units, timing method, gaps and caveats. Format version 4. The plain
+*Samples CSV* stays at 1 Hz and gains `exp_flow_l_min`, `exp_gas_temp_c`, `exp_rh_pct` and
+`exp_flow_coverage`.
+
 ## Recordings
 
 The desktop app records to an **append-only journal**: one JSON object per line, `fsync`ed before the
@@ -95,6 +164,7 @@ write returns. Nothing is ever rewritten, so the worst a crash can do is cut the
 ```
 ~/Documents/testday/sessions/2026-08-12_07-31_session_xyz/
   journal.ndjson   one line per sample, appended live
+  flow.ndjson      the TSI flow meter's rows, when one is connected (see above)
   meta.json        cached summary for the session list, rewritten on close
 ```
 
@@ -168,8 +238,8 @@ npm run preview
 BASE_PATH=/testday/ npm run build
 ```
 
-The desktop app makes **no network requests at all** — non-local requests are blocked outright and
-there is no updater. Nothing about it can hang on a conference-centre network on the morning of a test.
+The desktop app makes **no internet requests at all**: non-local web requests are blocked outright and
+there is no updater. The only socket it opens is to the TSI flow meter, over the meter's own USB link. Nothing about it can hang on a conference-centre network on the morning of a test.
 
 ## Layout
 
@@ -207,7 +277,8 @@ src/
 Tests cover the parts where being wrong is silent: characteristic parsing (including the inverted
 "more data" flag in FTMS and 16-bit counter wraparound), the runner's timing and ERG behaviour, the
 MMP tracker against a brute-force search, every threshold method against a synthetic step test, and
-the journal.
+the journal, and the TSI flow meter against a TCP emulator of the meter (bursty delivery, queued
+commands, restart gaps, dropped links), with timing checked against each row's true sample time.
 
 The journal tests are the ones that matter most, because a recording bug is not visible until the
 recording is needed. They cover encoding round-trips, a truncated final line, a corrupt line in the
@@ -216,7 +287,7 @@ with `SIGKILL` mid-recording, and checks that every sample the recorder acknowle
 no gaps: truncating a file by hand only tests the reader, not the durability claim.
 
 ```
-npm test    # 297 tests
+npm test    # 424 tests
 ```
 
 ### Verifying the FIT output

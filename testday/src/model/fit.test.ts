@@ -371,6 +371,31 @@ describe('laps', () => {
     expect(laps.map((l) => l.stepIndex)).toEqual([0, 1, 0])
   })
 
+  /**
+   * The vertical metres of each step, summarised from the same trace the
+   * altitude field carries, so the summary and the stream cannot disagree.
+   * A lap is charged for the climb on the interval into it, which is why the
+   * laps add up to the whole climb rather than losing a step each.
+   */
+  it('summarises the climb of each lap', () => {
+    const session = bikeSession({
+      sport: 'run',
+      samples: [
+        sample(0, { inclinePct: 10, distanceM: 0 }),
+        sample(1, { inclinePct: 10, distanceM: 100 }),
+        sample(2, { stepIndex: 1, inclinePct: -10, distanceM: 200 }),
+        sample(3, { stepIndex: 1, inclinePct: -10, distanceM: 300 }),
+      ],
+    })
+    const laps = findAll(decodeFit(sessionToFit(session)), MESG.lap)
+    expect(laps[0].fields[21]).toBe(10) // 100 m at 10% climbed
+    expect(laps[0].fields[22]).toBe(0)
+    // The second lap starts where the first ended, so its first interval is
+    // its own: 200 m of -10% is 20 vertical metres down.
+    expect(laps[1].fields[21]).toBe(0)
+    expect(laps[1].fields[22]).toBe(20)
+  })
+
   it('carries the step target as text on the lap', () => {
     const session = bikeSession()
     const protocol = makeProtocol('Step test', 'bike', [
@@ -410,6 +435,35 @@ describe('the session summary', () => {
     const summary = findAll(decodeFit(sessionToFit(session)), MESG.session)[0]
     // 40 mL/kg/min × 75 kg = 3 L/min = 15 kcal/min over one minute.
     expect(Number(summary.fields[11])).toBeCloseTo(15, 0)
+  })
+
+  it('totals the climb and the descent over the whole session', () => {
+    const session = bikeSession({
+      sport: 'run',
+      samples: [
+        sample(0, { inclinePct: 6, distanceM: 0 }),
+        sample(1, { inclinePct: 6, distanceM: 500 }),
+        sample(2, { inclinePct: -4, distanceM: 1000 }),
+        sample(3, { inclinePct: -4, distanceM: 1500 }),
+      ],
+    })
+    const summary = findAll(decodeFit(sessionToFit(session)), MESG.session)[0]
+    // Up 500 m at 6%, then down 1000 m at 4%. The two are reported apart, not
+    // netted: a net figure of -10 m would describe neither.
+    expect(summary.fields[22]).toBe(30)
+    expect(summary.fields[23]).toBe(40)
+  })
+
+  /**
+   * An absent gradient is not a flat one. Writing a zero here would say the
+   * athlete ran level, which is a measurement this session did not make.
+   */
+  it('leaves the climb absent when nothing recorded a gradient', () => {
+    const summary = findAll(decodeFit(sessionToFit(bikeSession())), MESG.session)[0]
+    // 0xffff is uint16's reserved "not present", which is how an absent field
+    // comes back from a conforming decoder. It is not the same as a zero.
+    expect(summary.fields[22]).toBe(0xffff)
+    expect(summary.fields[23]).toBe(0xffff)
   })
 
   it('brackets the records with a timer start and a timer stop', () => {

@@ -11,6 +11,7 @@ import type { SessionSummary } from '../model/journal'
 import {
   download,
   downloadBytes,
+  downloadParts,
   lapsToCsv,
   samplesToCsv,
   sessionFilename,
@@ -18,6 +19,9 @@ import {
 } from '../model/export'
 import { fitFilename, sessionToFit } from '../model/fit'
 import { pseudonymise, researchSidecar } from '../model/research'
+import type { FlowRecord } from '../model/flow'
+import { flowRows, flowSidecar, withExhaled } from '../model/flowExport'
+import { buildResearchGrid } from '../model/researchGrid'
 import { parseCartCsv, ventilatoryThresholds, type VentilatoryResult } from '../model/ventilatory'
 import { APP_VERSION } from '../model/version'
 
@@ -150,6 +154,23 @@ function SessionDetail({
   const isRun = session.sport === 'run'
   const protocol = protocols.find((p) => p.id === session.protocolId)
 
+  // The flow meter's recording lives beside the journal, not in the session
+  // record, and is read only when this session is opened. Null means none.
+  const [flow, setFlow] = useState<FlowRecord[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setFlow(null)
+    void window.testday?.flowRead(session.id).then((records) => {
+      if (!cancelled) setFlow(records && records.length ? records : null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [session.id])
+  const rows = useMemo(() => (flow ? flowRows(flow) : []), [flow])
+  const exported = useMemo(() => withExhaled(session, rows), [session, rows])
+  const [exporting, setExporting] = useState(false)
+
   const laps = useMemo(
     () =>
       protocol
@@ -225,24 +246,39 @@ function SessionDetail({
           <button className="primary" onClick={onResume} title="Reopen this session and record into it again">
             Resume
           </button>
-          <button onClick={() => download(sessionFilename(session, 'csv'), samplesToCsv(session), 'text/csv')}>
+          <button onClick={() => download(sessionFilename(session, 'csv'), samplesToCsv(exported), 'text/csv')}>
             Samples CSV
           </button>
           <button
-            title="Pseudonymised 1 Hz CSV plus a sidecar describing every column, the equations used and the protocol as actually executed"
+            title="Pseudonymised CSV on one time grid at the rate of the fastest device, plus a sidecar describing every column, where each came from, the equations used and the protocol as actually executed"
+            disabled={exporting}
             onClick={() => {
-              // Pseudonymised, because this is the export that leaves the
-              // machine. The name stays here; the code goes with the data.
-              const anonymous = pseudonymise(session, salt)
-              download(sessionFilename(anonymous, 'research.csv'), samplesToCsv(anonymous), 'text/csv')
-              download(
-                sessionFilename(anonymous, 'research.json'),
-                researchSidecar(anonymous, { appVersion: APP_VERSION, protocol: protocol ?? undefined }),
-                'application/json',
-              )
+              setExporting(true)
+              void (async () => {
+                try {
+                  // Pseudonymised, because this is the export that leaves the
+                  // machine. The name stays here; the code goes with the data.
+                  const anonymous = pseudonymise(session, salt)
+                  const raw = (await window.testday?.rawRead(session.id)) ?? []
+                  const grid = buildResearchGrid(anonymous, raw, flow)
+                  downloadParts(sessionFilename(anonymous, 'research.csv'), grid.csvParts, 'text/csv')
+                  download(
+                    sessionFilename(anonymous, 'research.json'),
+                    researchSidecar(anonymous, {
+                      appVersion: APP_VERSION,
+                      protocol: protocol ?? undefined,
+                      flow: flow ? flowSidecar(flow, rows) : undefined,
+                      grid,
+                    }),
+                    'application/json',
+                  )
+                } finally {
+                  setExporting(false)
+                }
+              })()
             }}
           >
-            Research export
+            {exporting ? 'Exporting…' : 'Research export'}
           </button>
           <button onClick={() => download(sessionFilename(session, 'laps.csv'), lapsToCsv(laps), 'text/csv')}>
             Laps CSV

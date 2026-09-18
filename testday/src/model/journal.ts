@@ -71,6 +71,15 @@ export type JournalEventKind =
    * warning outlives the screen it appeared on.
    */
   | 'powerSources'
+  /**
+   * The TSI flow meter: its identity and settings when a session starts or they
+   * change, and every command the operator sent it. The waveform itself is in
+   * `flow.ndjson`; these keep the session's own history complete without it.
+   */
+  | 'flowMeter'
+  | 'flowZero'
+  | 'flowTotalizerReset'
+  | 'flowRate'
 
 export interface JournalEvent {
   type: 'event'
@@ -181,7 +190,8 @@ export interface DecodedJournal {
   malformed: number
 }
 
-export const encodeRecord = (record: JournalRecord): string => `${JSON.stringify(record)}\n`
+/** One line of NDJSON. Typed loosely so the flow meter's own file can share the writer. */
+export const encodeRecord = (record: { type: string }): string => `${JSON.stringify(record)}\n`
 
 export const encodeRecords = (records: readonly JournalRecord[]): string =>
   records.map(encodeRecord).join('')

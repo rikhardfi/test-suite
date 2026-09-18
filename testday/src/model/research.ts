@@ -2,6 +2,8 @@ import type { SessionRecord, Sample } from './session'
 import type { Protocol } from './protocol'
 import { VO2_METHODS } from './vo2'
 import type { JournalEvent, JournalRecord } from './journal'
+import type { FlowSidecar } from './flowExport'
+import { RESEARCH_COLUMNS, gridSidecar, type ResearchGrid } from './researchGrid'
 
 /**
  * The research export: a frozen CSV contract plus a sidecar that says what the
@@ -27,7 +29,7 @@ import type { JournalEvent, JournalRecord } from './journal'
  */
 
 /** Bumped when a column is appended. Never on a rename, because there are none. */
-export const RESEARCH_EXPORT_VERSION = 2
+export const RESEARCH_EXPORT_VERSION = 4
 
 export interface ColumnSpec {
   name: string
@@ -122,6 +124,28 @@ export const SAMPLE_COLUMNS: readonly ColumnSpec[] = [
     description:
       '1 when the reference meter was not reporting and the last known correction was held. The step is uncorrected in that stretch',
   },
+  // Version 3: the TSI flow meter, summarised from its full-rate file.
+  {
+    name: 'exp_flow_l_min',
+    unit: 'L/min',
+    description:
+      'Mean exhaled flow over the second of protocol time ending at elapsed_s (TSI meter; standard or volumetric per flowMeter.flowUnits, not BTPS). Full rate in the .flow.csv',
+    from: 'exhaledFlowLMin',
+  },
+  { name: 'exp_gas_temp_c', unit: 'degC', description: 'Mean gas temperature in the flow meter over the same second', from: 'exhaledGasTempC' },
+  {
+    name: 'exp_rh_pct',
+    unit: '%',
+    description:
+      'Mean relative humidity in the flow meter over the same second. Blank if any reading in the second was saturated (condensation). Sensor responds over seconds',
+    from: 'exhaledRhPct',
+  },
+  {
+    name: 'exp_flow_coverage',
+    unit: '',
+    description: 'Share of the second the flow meter actually sent (below 1 where the meter restarted its stream)',
+    from: 'exhaledCoverage',
+  },
 ]
 
 // --- provenance -------------------------------------------------------------
@@ -190,6 +214,13 @@ export interface SidecarOptions {
   /** Named devices that contributed, where the app knows them. */
   devices?: { id: string; name: string; kind: string; firmware?: string }[]
   salt?: string
+  /** The flow meter, when the session recorded one. */
+  flow?: FlowSidecar
+  /**
+   * The research CSV's time grid. When given, the sidecar describes that file;
+   * without it, the 1 Hz sample CSV.
+   */
+  grid?: ResearchGrid
 }
 
 /**
@@ -228,15 +259,19 @@ export function researchSidecar(session: SessionRecord, options: SidecarOptions)
         vo2maxMlKgMin: session.athlete.vo2maxMlKgMin ?? null,
       },
 
-      sampling: {
-        derivedSeriesHz: 1,
-        note:
-          'The CSV is a 1 Hz derived series. The journal also holds every sensor ' +
-          'notification at its own native rate, which is not resampled and is not ' +
-          'in this file.',
-      },
+      sampling: options.grid
+        ? gridSidecar(options.grid)
+        : {
+            derivedSeriesHz: 1,
+            note:
+              'The CSV is a 1 Hz derived series. The journal also holds every sensor ' +
+              'notification at its own native rate, which is not resampled and is not ' +
+              'in this file.',
+          },
 
-      columns: SAMPLE_COLUMNS.map((column) => ({
+      flowMeter: options.flow ?? null,
+
+      columns: (options.grid ? RESEARCH_COLUMNS : SAMPLE_COLUMNS).map((column) => ({
         name: column.name,
         unit: column.unit,
         description: column.description,

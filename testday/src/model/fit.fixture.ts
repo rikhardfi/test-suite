@@ -94,6 +94,13 @@ const LAP_DISTANCE = (SAMPLES_PER_STEP - 1) * SPEED_MS
 const TOTAL_DISTANCE = (TOTAL_SAMPLES - 1) * SPEED_MS
 /** Vertical metres, quantised by the altitude field's 0.2 m resolution. */
 const TOTAL_CLIMB = Math.round((TOTAL_DISTANCE * (GRADE_PCT / 100) + 500) * 5) / 5 - 500
+/**
+ * The ascent summaries are whole metres, which is that field's resolution. The
+ * first lap climbs one interval less than the others, and the difference is
+ * smaller than the rounding.
+ */
+const LAP_ASCENT = Math.round(SAMPLES_PER_STEP * SPEED_MS * (GRADE_PCT / 100))
+const TOTAL_ASCENT = Math.round(TOTAL_DISTANCE * (GRADE_PCT / 100))
 
 /**
  * What `fitdecode`, carrying Garmin's own profile, should report.
@@ -198,6 +205,10 @@ export const fixtureExpectations = {
     blood_lactate: [1.2, 2.4, 4.8][step],
     rpe_borg: [11, 14, 17][step],
     step_target: `${powerFor(step)} W`,
+    total_ascent: LAP_ASCENT,
+    // A constant climb, so nothing goes down. Zero rather than absent: the
+    // gradient was recorded, and it never pointed downhill.
+    total_descent: 0,
   })),
 
   session: {
@@ -219,5 +230,7 @@ export const fixtureExpectations = {
     max_speed: SPEED_MS,
     num_laps: STEPS,
     first_lap_index: 0,
+    total_ascent: TOTAL_ASCENT,
+    total_descent: 0,
   },
 }

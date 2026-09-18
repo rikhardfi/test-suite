@@ -51,6 +51,11 @@ export const METRIC_INFO: Record<MetricKey, MetricInfo> = {
   coreHrmState: { label: 'CORE strap link', unit: '', typicalIntervalS: 2, channel: 'metric' },
   ventilationLMin: { label: 'Minute ventilation', unit: 'L/min', typicalIntervalS: 1, channel: 'metric' },
   breathingRate: { label: 'Breathing rate', unit: 'breaths/min', typicalIntervalS: 1, channel: 'metric' },
+  expFlowLMin: { label: 'Exhaled flow', unit: 'L/min', typicalIntervalS: 1, channel: 'metric' },
+  expTempC: { label: 'Exhaled gas temperature', unit: '°C', typicalIntervalS: 1, channel: 'metric' },
+  expHumidityPct: { label: 'Exhaled gas humidity', unit: '%RH', typicalIntervalS: 1, channel: 'metric' },
+  expTotalL: { label: 'Exhaled volume', unit: 'L', typicalIntervalS: 1, channel: 'metric' },
+  flowLowPressureCmH2O: { label: 'Circuit pressure', unit: 'cmH₂O', typicalIntervalS: 1, channel: 'metric' },
   // Every one of these moves on the monitor's own schedule, which is minutes.
   co2Ppm: { label: 'CO₂', unit: 'ppm', typicalIntervalS: 300, channel: 'environment' },
   ambientTempC: { label: 'Air temperature', unit: '°C', typicalIntervalS: 300, channel: 'environment' },

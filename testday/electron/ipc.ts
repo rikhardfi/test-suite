@@ -8,6 +8,7 @@ import type {
 } from '../src/model/journal'
 import type { LactateEntry, Sample, SessionRecord } from '../src/model/session'
 import type { Protocol } from '../src/model/protocol'
+import type { FlowCommand, FlowMeterStatus, FlowRecord } from '../src/model/flow'
 
 /**
  * The contract between the recording process and the interface. Both sides
@@ -38,8 +39,16 @@ export const IPC = {
   library: 'testday:library',
   saveProtocols: 'testday:save-protocols',
   savePreferences: 'testday:save-preferences',
+  flowConnect: 'testday:flow-connect',
+  flowDisconnect: 'testday:flow-disconnect',
+  flowZero: 'testday:flow-zero',
+  flowResetTotal: 'testday:flow-reset-total',
+  flowRate: 'testday:flow-rate',
+  flowRead: 'testday:flow-read',
+  rawRead: 'testday:raw-read',
   // Pushed from the recorder to the interface.
   writeStatus: 'testday:write-status',
+  flowStatus: 'testday:flow-status',
   bluetoothDevices: 'testday:bluetooth-devices',
   selectBluetooth: 'testday:select-bluetooth',
 } as const
@@ -139,6 +148,22 @@ export interface TestdayBridge {
   /** The whole list, every time: it is small, and a partial write is worse. */
   saveProtocols(protocols: Protocol[]): Promise<void>
   savePreferences(preferences: Record<string, unknown>): Promise<void>
+
+  /**
+   * The TSI flow meter, which lives in the recording process: its rows are too
+   * many to cross to the interface, so only a status does, a few times a second.
+   * Connect and the commands reject with a message the operator can act on.
+   */
+  flowConnect(options: { host?: string; rateMs: number }): Promise<FlowMeterStatus>
+  flowDisconnect(): Promise<void>
+  flowZero(): Promise<FlowCommand>
+  flowResetTotal(): Promise<FlowCommand>
+  flowRate(ms: number): Promise<FlowCommand>
+  onFlowStatus(listener: (status: FlowMeterStatus) => void): () => void
+  /** A session's flow meter recording, or null when it has none. For export. */
+  flowRead(sessionId: string): Promise<FlowRecord[] | null>
+  /** A session's native-rate sensor notifications, for the research export. */
+  rawRead(sessionId: string): Promise<JournalRaw[]>
 
   onWriteStatus(listener: (status: WriteStatus) => void): () => void
   onBluetoothDevices(listener: (devices: BluetoothDeviceInfo[]) => void): () => void

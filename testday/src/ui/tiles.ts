@@ -379,6 +379,47 @@ export const TILES: readonly TileDef[] = [
     },
   },
 
+  // --- the breath: TSI flow meter on the expiratory limb ----------------------
+  {
+    key: 'expFlow',
+    label: 'Exhaled flow',
+    tone: 'vo2',
+    about:
+      'Mean exhaled flow through the TSI meter over the last quarter second, Std L/min: dry gas at 21.11 °C and 101.3 kPa, not BTPS, so it reads below minute ventilation.',
+    compute: (c) =>
+      c.metrics.expFlowLMin == null
+        ? null
+        : { value: c.metrics.expFlowLMin.toFixed(1), unit: 'L/min', note: 'Std, dry gas' },
+  },
+  {
+    key: 'expGas',
+    label: 'Exhaled gas',
+    tone: 'vo2',
+    about:
+      'Temperature and relative humidity of the gas in the flow meter. The humidity sensor responds over seconds, so this follows the trend across breaths, never a single breath. Blank at 100 % RH, which is condensation rather than a reading.',
+    compute: (c) => {
+      if (c.metrics.expTempC == null) return null
+      return {
+        value: c.metrics.expTempC.toFixed(1),
+        unit: '°C',
+        note:
+          c.metrics.expHumidityPct != null
+            ? `${c.metrics.expHumidityPct.toFixed(0)} %RH`
+            : 'humidity saturated',
+        suspect: c.metrics.expHumidityPct == null,
+      }
+    },
+  },
+  {
+    key: 'expVolume',
+    label: 'Exhaled volume',
+    tone: 'vo2',
+    about:
+      "The flow meter's running volume since it was last reset (Sensors → TSI flow meter → Reset volume), Std L.",
+    compute: (c) =>
+      c.metrics.expTotalL == null ? null : { value: c.metrics.expTotalL.toFixed(1), unit: 'L', note: 'since reset' },
+  },
+
   // --- the body -------------------------------------------------------------
   {
     key: 'coreTemp',

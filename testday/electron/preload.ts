@@ -41,6 +41,21 @@ const bridge: TestdayBridge = {
   saveProtocols: (protocols) => ipcRenderer.invoke(IPC.saveProtocols, protocols),
   savePreferences: (preferences) => ipcRenderer.invoke(IPC.savePreferences, preferences),
 
+  flowConnect: (options) => ipcRenderer.invoke(IPC.flowConnect, options),
+  flowDisconnect: () => ipcRenderer.invoke(IPC.flowDisconnect),
+  flowZero: () => ipcRenderer.invoke(IPC.flowZero),
+  flowResetTotal: () => ipcRenderer.invoke(IPC.flowResetTotal),
+  flowRate: (ms) => ipcRenderer.invoke(IPC.flowRate, ms),
+  flowRead: (sessionId) => ipcRenderer.invoke(IPC.flowRead, sessionId),
+  rawRead: (sessionId) => ipcRenderer.invoke(IPC.rawRead, sessionId),
+  onFlowStatus: (listener) => {
+    const handler = (_event: unknown, status: Parameters<typeof listener>[0]) => listener(status)
+    ipcRenderer.on(IPC.flowStatus, handler)
+    return () => {
+      ipcRenderer.off(IPC.flowStatus, handler)
+    }
+  },
+
   onWriteStatus: (listener) => {
     const handler = (_event: unknown, status: Parameters<typeof listener>[0]) => listener(status)
     ipcRenderer.on(IPC.writeStatus, handler)

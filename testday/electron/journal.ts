@@ -18,7 +18,7 @@ import {
  * expose). Run test days on mains power. This limit is stated in the README
  * rather than quietly assumed away.
  */
-export class JournalWriter {
+export class JournalWriter<R extends { type: string } = JournalRecord> {
   readonly path: string
   private fd: number | null = null
   private written = 0
@@ -49,7 +49,7 @@ export class JournalWriter {
    * Appends one record and does not return until it is on disk. Throws on
    * failure, so a caller can never mistake a failed write for a successful one.
    */
-  append(record: JournalRecord): void {
+  append(record: R): void {
     if (this.fd === null) throw new Error(`Journal is closed: ${this.path}`)
     writeSync(this.fd, encodeRecord(record))
     fsyncSync(this.fd)
@@ -57,7 +57,7 @@ export class JournalWriter {
     this.lastWriteAt = Date.now()
   }
 
-  appendAll(records: readonly JournalRecord[]): void {
+  appendAll(records: readonly R[]): void {
     if (this.fd === null) throw new Error(`Journal is closed: ${this.path}`)
     if (records.length === 0) return
     // One fsync for the batch: used by the migration importer, never by the

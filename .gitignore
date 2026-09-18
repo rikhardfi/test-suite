@@ -6,3 +6,6 @@ tasks/
 
 # OS
 .DS_Store
+
+# Python
+__pycache__/

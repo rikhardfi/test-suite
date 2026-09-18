@@ -12,11 +12,13 @@ import {
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { JournalWriter } from './journal'
+import { JournalWriter, readJournalFile } from './journal'
 import { DiagnosticsLog, describeError } from './log'
 import { PendingAppends } from './pending'
 import { SessionStore, isClosed, type OpenSession } from './sessions'
 import { Library } from './library'
+import { FlowCapture } from './tsi/capture'
+import { FLOW_FILE, decodeFlow } from '../src/model/flow'
 import { IPC, type CloseResult, type StoragePaths, type WriteStatus } from './ipc'
 import type {
   JournalEvent,
@@ -26,6 +28,7 @@ import type {
   JournalRecord,
   JournalRr,
 } from '../src/model/journal'
+import { rawFromRecords } from '../src/model/journal'
 import type { LactateEntry, Sample, SessionRecord } from '../src/model/session'
 import type { Protocol } from '../src/model/protocol'
 
@@ -72,6 +75,23 @@ let win: BrowserWindow | null = null
 /** The session currently being recorded, if any. At most one at a time. */
 let active: OpenSession | null = null
 let sleepBlockerId: number | null = null
+
+/**
+ * The TSI flow meter. Owned here rather than in the interface because the
+ * renderer has no sockets, and because its rows are written straight to the
+ * session folder without crossing IPC.
+ */
+const flow = new FlowCapture({
+  pushStatus: (status) => win?.webContents.send(IPC.flowStatus, status),
+  journalEvent: (kind, data) => {
+    guardedAppend({ type: 'event', kind, at: Date.now(), data })
+  },
+  writeFailed: (message) => {
+    log.error('flow write failed', { message })
+    pushStatus(message)
+  },
+  info: (message, data) => log.info(message, data),
+})
 
 /** Held while the renderer is choosing a Bluetooth device. Called exactly once. */
 let bluetoothCallback: ((deviceId: string) => void) | null = null
@@ -294,6 +314,7 @@ function releaseSleep(): void {
 /** Closes the journal without a close record, leaving the session resumable. */
 function detachActive(): void {
   if (active) log.info('detaching active session', { id: active.id, samples: active.sampleCount })
+  flow.attach(null)
   active?.writer.close()
   active = null
   releaseSleep()
@@ -516,6 +537,7 @@ function registerHandlers(): void {
   ipcMain.handle(IPC.begin, (_event, header: JournalHeader) => {
     if (active) detachActive()
     active = store.begin(header)
+    flow.attach(active.dir)
     holdSleep()
     startWatchdog()
     log.info('session begun', { id: active.id })
@@ -561,6 +583,7 @@ function registerHandlers(): void {
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught)
     }
+    flow.attach(null)
     active.writer.close()
     active = null
     releaseSleep()
@@ -581,6 +604,26 @@ function registerHandlers(): void {
     }
   })
 
+  // Errors cross as rejections carrying the message, which is already worded
+  // for the operator.
+  ipcMain.handle(IPC.flowConnect, (_event, options: { host?: string; rateMs: number }) =>
+    flow.connect(options),
+  )
+  ipcMain.handle(IPC.flowDisconnect, () => flow.disconnect())
+  ipcMain.handle(IPC.flowZero, () => flow.zero())
+  ipcMain.handle(IPC.flowResetTotal, () => flow.resetTotal())
+  ipcMain.handle(IPC.flowRate, (_event, ms: number) => flow.setRate(ms))
+  ipcMain.handle(IPC.flowRead, (_event, id: string) => {
+    const dir = store.dirFor(id)
+    const path = dir ? join(dir, FLOW_FILE) : null
+    if (!path || !existsSync(path)) return null
+    return decodeFlow(readFileSync(path, 'utf8')).records
+  })
+  ipcMain.handle(IPC.rawRead, (_event, id: string) => {
+    const dir = store.dirFor(id)
+    return dir ? rawFromRecords(readJournalFile(store.journalPath(dir)).records) : []
+  })
+
   ipcMain.handle(IPC.list, () => store.list())
   ipcMain.handle(IPC.read, (_event, id: string) => store.read(id))
   ipcMain.handle(IPC.discard, (_event, id: string) => store.discard(id))
@@ -591,6 +634,7 @@ function registerHandlers(): void {
     const reopened = store.reopen(id)
     if (!reopened) return null
     active = reopened.open
+    flow.attach(active.dir)
     holdSleep()
     startWatchdog()
     // A finished session gets an explicit reopen record, so the close record

@@ -1,6 +1,6 @@
 {
   "name": "testday",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Web Bluetooth performance test-day suite: protocols, live ERG control, capture and lactate/threshold analysis.",

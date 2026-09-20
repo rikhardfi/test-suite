@@ -171,6 +171,20 @@ const RR_HISTORY_MS = 5 * 60 * 1000
 const IDLE_RECONNECT_ATTEMPTS = 12
 const MAX_BACKOFF_MS = 15000
 
+/**
+ * Backoff ceiling while a session is recording.
+ *
+ * A crank-mounted power meter drops because its antenna is behind the rider's
+ * leg, not because it has gone away, and it is advertising again within a
+ * second. Waiting fifteen of them puts a fifteen-second hole in the power trace
+ * and hands `power` to the trainer's own estimate for the duration — which is
+ * recorded as a source change, but is still the wrong number for a test that
+ * exists to measure the athlete. Outside a recording the long ceiling is right:
+ * a device that is switched off should not have something retrying at it every
+ * three seconds all day.
+ */
+const RECORDING_MAX_BACKOFF_MS = 3000
+
 /** One metric changing hands, from one device to another or to nothing. */
 export interface SourceChange {
   metric: MetricKey
@@ -189,9 +203,23 @@ interface Entry {
   ftms?: FtmsControl
   /** Held so a device can be reconnected without the caller supplying it again. */
   profile?: SensorProfile
-  reconnectAttempts?: number
   /** Set for devices that are polled rather than notified, e.g. the Aranet. */
   pollTimer?: ReturnType<typeof setInterval>
+  /** True once the disconnect handler is bound, so it is never bound twice. */
+  watched?: boolean
+  /** In flight while a reconnect loop is running, so a second never starts. */
+  reconnecting?: Promise<void>
+  /** Ends the current backoff early, for a retry the operator asked for. */
+  wake?: () => void
+  /**
+   * Cancels the notification handlers belonging to one GATT session.
+   *
+   * Every handler registered against a characteristic is bound to this signal,
+   * so opening a new session drops the previous session's handlers in one move
+   * rather than leaving them attached to a characteristic object the browser
+   * may well hand back again.
+   */
+  session?: AbortController
 }
 
 export class SensorManager {
@@ -322,12 +350,7 @@ export class SensorManager {
       }
       const held: Entry = { device: sensor, values: new Map(), gattDevice: device, profile }
       this.entries.set(entry.id, held)
-      device.addEventListener('gattserverdisconnected', () => {
-        held.ftms?.forgetControl()
-        sensor.state = 'reconnecting'
-        this.emit()
-        void this.reconnect(held, profile)
-      })
+      this.watch(held, profile)
 
       try {
         await this.openSession(held, profile)
@@ -526,7 +549,23 @@ export class SensorManager {
 
     const id = device.id || `${profile.key}:${device.name ?? 'device'}`
     const existing = this.entries.get(id)
-    if (existing && existing.device.state === 'connected') return existing.device
+    if (existing) {
+      if (existing.device.state === 'connected') return existing.device
+      // Pairing something that is already known, because the operator got
+      // tired of watching it reconnect. The entry is kept rather than replaced:
+      // a second one would leave the first still holding a disconnect handler
+      // bound to a device object the browser hands back unchanged, and the two
+      // would then chase the same radio past each other. For the same reason
+      // this goes through the one reconnect loop rather than opening a session
+      // alongside it — it asks for the device now, it does not race for it.
+      existing.gattDevice = device
+      existing.profile = profile
+      this.watch(existing, profile)
+      existing.device.state = 'reconnecting'
+      this.emit()
+      void this.reconnect(existing, profile, { immediate: true })
+      return existing.device
+    }
 
     const sensor: SensorDevice = {
       id,
@@ -541,14 +580,8 @@ export class SensorManager {
 
     const entry: Entry = { device: sensor, values: new Map(), gattDevice: device, profile }
     this.entries.set(id, entry)
+    this.watch(entry, profile)
     this.emit()
-
-    device.addEventListener('gattserverdisconnected', () => {
-      entry.ftms?.forgetControl()
-      sensor.state = 'reconnecting'
-      this.emit()
-      void this.reconnect(entry, profile)
-    })
 
     try {
       await this.openSession(entry, profile)
@@ -598,6 +631,7 @@ export class SensorManager {
       disconnect: () => this.entries.get(id)?.gattDevice?.gatt?.disconnect(),
     }
     const entry: Entry = { device: sensor, values: new Map(), gattDevice: device }
+    entry.session = new AbortController()
     this.entries.set(id, entry)
     this.emit()
 
@@ -609,12 +643,16 @@ export class SensorManager {
       let subscribed = 0
       for (const chr of characteristics) {
         if (!chr.properties.notify && !chr.properties.indicate) continue
-        chr.addEventListener('characteristicvaluechanged', (event) => {
-          const value = (event.target as BluetoothRemoteGATTCharacteristic).value
-          if (!value) return
-          // Captured, never interpreted.
-          this.trace.capture(id, sensor.name, chr.uuid, value)
-        })
+        chr.addEventListener(
+          'characteristicvaluechanged',
+          (event) => {
+            const value = (event.target as BluetoothRemoteGATTCharacteristic).value
+            if (!value) return
+            // Captured, never interpreted.
+            this.trace.capture(id, sensor.name, chr.uuid, value)
+          },
+          { signal: entry.session?.signal },
+        )
         try {
           await chr.startNotifications()
           subscribed += 1
@@ -637,34 +675,133 @@ export class SensorManager {
     return sensor
   }
   /**
-   * Reconnects with capped backoff.
+   * Binds the one disconnect handler a device gets.
+   *
+   * Bound once per entry and never again: the browser hands back the same
+   * `BluetoothDevice` object for a device it already knows, so re-pairing one
+   * used to leave a second handler on it, and then a third.
+   */
+  private watch(entry: Entry, profile: SensorProfile): void {
+    if (entry.watched || !entry.gattDevice) return
+    entry.watched = true
+    entry.gattDevice.addEventListener('gattserverdisconnected', () => {
+      if (!this.isCurrent(entry)) return
+      entry.ftms?.forgetControl()
+      // Counted only from a link that was up, so the disconnect we ourselves
+      // ask for between failed attempts is not recorded as the device dropping.
+      if (entry.device.state === 'connected') {
+        entry.device.drops = (entry.device.drops ?? 0) + 1
+      }
+      entry.device.state = 'reconnecting'
+      this.emit()
+      void this.reconnect(entry, profile)
+    })
+  }
+
+  /**
+   * Whether this entry is still the one registered under its id.
+   *
+   * The browser keeps a handler attached to a `BluetoothDevice` for the life of
+   * the page, so an entry that was dropped — a pairing that failed, a device the
+   * operator removed — can still be woken by one. Checked by identity rather
+   * than by id, since a device paired again gets a new entry under the old id
+   * and the two must not both drive the same radio.
+   */
+  private isCurrent(entry: Entry): boolean {
+    return this.entries.get(entry.device.id) === entry
+  }
+
+  /**
+   * Reconnects with capped backoff, one loop at a time.
    *
    * Never gives up while a session is recording. A strap that drops out at
    * minute five of a forty-five minute test used to be gone for the rest of it,
    * because the attempts ran out long before the test did. Outside a recording
    * the attempts are bounded, so a device left switched off does not have
    * something retrying at it all day.
+   *
+   * The single loop is the point. A device that drops repeatedly — which is the
+   * normal life of a crank-mounted power meter once the rider is working, since
+   * the antenna spends part of every revolution behind a leg — fires
+   * `gattserverdisconnected` again each time, and a loop per event left several
+   * of them calling `gatt.connect()` on the same radio at once. The browser
+   * settles that by failing all but one, so the more often the device dropped
+   * the less likely any attempt was to succeed, and a meter that was in range
+   * the whole time sat in "reconnecting" for the rest of the test. Extra events
+   * now join the loop that is already running instead of starting another.
    */
-  private async reconnect(entry: Entry, profile: SensorProfile): Promise<void> {
-    for (let attempt = 0; ; attempt++) {
-      if (!this.entries.has(entry.device.id)) return
+  private reconnect(
+    entry: Entry,
+    profile: SensorProfile,
+    { immediate = false }: { immediate?: boolean } = {},
+  ): Promise<void> {
+    if (entry.reconnecting) {
+      // Only something the operator asked for cuts the wait short. A drop
+      // arriving while we are already backing off is not news.
+      if (immediate) {
+        entry.device.reconnectAttempts = 0
+        entry.wake?.()
+      }
+      return entry.reconnecting
+    }
+    if (immediate) entry.device.reconnectAttempts = 0
+    const loop = this.reconnectLoop(entry, profile, immediate).finally(() => {
+      entry.reconnecting = undefined
+      entry.wake = undefined
+    })
+    entry.reconnecting = loop
+    return loop
+  }
+
+  private async reconnectLoop(
+    entry: Entry,
+    profile: SensorProfile,
+    /** Skips the first wait: the operator, or a test starting, asked for it now. */
+    now = false,
+  ): Promise<void> {
+    let skipWait = now
+    for (;;) {
+      // Read back each time round rather than counted locally, so a retry can
+      // reset it and put the loop back on a short wait.
+      const attempt = entry.device.reconnectAttempts ?? 0
+      if (!this.isCurrent(entry)) return
       if (attempt >= IDLE_RECONNECT_ATTEMPTS && !this.recording) break
-      entry.reconnectAttempts = attempt + 1
-      await delay(Math.min(1000 * 2 ** Math.min(attempt, 4), MAX_BACKOFF_MS))
-      if (!this.entries.has(entry.device.id)) return
+      entry.device.reconnectAttempts = attempt + 1
+      if (skipWait) skipWait = false
+      else await this.backoff(entry, attempt)
+      if (!this.isCurrent(entry)) return
       try {
         await this.openSession(entry, profile)
         entry.device.state = 'connected'
-        entry.reconnectAttempts = 0
+        entry.device.reconnectAttempts = 0
         this.emit()
         return
       } catch {
-        // Device still out of range; keep trying.
+        // Still out of range, or the link came back half open — connected as
+        // far as the browser is concerned, with an attribute cache that no
+        // longer resolves. Retrying down that same session fails identically
+        // for ever, so it is dropped and the next attempt builds a fresh one.
+        this.closeLink(entry)
         this.emit()
       }
     }
     entry.device.state = 'disconnected'
     this.emit()
+  }
+
+  /** Waits out one attempt, or less if a retry asks for the device now. */
+  private backoff(entry: Entry, attempt: number): Promise<void> {
+    const ceiling = this.recording ? RECORDING_MAX_BACKOFF_MS : MAX_BACKOFF_MS
+    const ms = Math.min(1000 * 2 ** Math.min(attempt, 4), ceiling)
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer)
+        entry.wake = undefined
+        resolve()
+      }
+      const timer = setTimeout(done, ms)
+      entry.wake = done
+    })
   }
 
   /**
@@ -674,12 +811,14 @@ export class SensorManager {
   setRecording(recording: boolean): void {
     this.recording = recording
     if (!recording) return
-    // Anything that gave up while idle gets another run at it now that a test
-    // has started, which is exactly when the operator needs it back.
+    // Everything that is not currently connected gets another run at it now
+    // that a test has started, which is exactly when the operator needs it
+    // back: the ones that gave up while idle, and the ones part-way through a
+    // fifteen-second idle wait that has no business being that long any more.
     for (const entry of this.entries.values()) {
-      if (entry.device.state !== 'disconnected' || !entry.profile) continue
+      if (entry.device.state === 'connected' || !entry.profile) continue
       entry.device.state = 'reconnecting'
-      void this.reconnect(entry, entry.profile)
+      void this.reconnect(entry, entry.profile, { immediate: true })
     }
     this.emit()
   }
@@ -689,14 +828,21 @@ export class SensorManager {
     const entry = this.entries.get(deviceId)
     if (!entry?.profile || entry.device.state === 'connected') return
     entry.device.state = 'reconnecting'
-    entry.reconnectAttempts = 0
     this.emit()
-    void this.reconnect(entry, entry.profile)
+    void this.reconnect(entry, entry.profile, { immediate: true })
   }
 
   private async openSession(entry: Entry, profile: SensorProfile): Promise<void> {
     const gatt = entry.gattDevice?.gatt
     if (!gatt) throw new Error('Device has no GATT server')
+    // Whatever the last session left behind, before anything is subscribed
+    // again. On a link that is still up the browser hands back the very same
+    // characteristic object, so re-subscribing without this would leave two
+    // handlers on it and every packet would be ingested, journalled and traced
+    // twice — a duplicate the arbitration cannot see, because both copies come
+    // from the same device.
+    this.closeSession(entry)
+    entry.session = new AbortController()
     const server = gatt.connected ? gatt : await gatt.connect()
     const service = await server.getPrimaryService(profile.service)
 
@@ -788,7 +934,7 @@ export class SensorManager {
     }
 
     const read = async () => {
-      if (!this.entries.has(entry.device.id)) return
+      if (!this.isCurrent(entry)) return
       const update: MetricUpdate = {}
       for (const { chr, parse } of readable) {
         try {
@@ -824,7 +970,7 @@ export class SensorManager {
     }
 
     const read = async () => {
-      if (!this.entries.has(entry.device.id)) return
+      if (!this.isCurrent(entry)) return
       try {
         this.ingest(entry.device.id, parseAranet(await readings.readValue()))
       } catch {
@@ -873,20 +1019,26 @@ export class SensorManager {
       return false
     }
 
-    chr.addEventListener('characteristicvaluechanged', (event) => {
-      const value = (event.target as BluetoothRemoteGATTCharacteristic).value
-      if (!value) return
-      let decoded: MetricUpdate | undefined
-      try {
-        decoded = parse(value)
-        this.ingest(entry.device.id, decoded)
-      } catch {
-        // A malformed packet must not tear down the notification stream.
-      }
-      // Captured after parsing and outside the try, so a packet that broke the
-      // parser is still kept: that is the one worth having.
-      this.trace.capture(entry.device.id, entry.device.name, String(uuid), value, decoded)
-    })
+    chr.addEventListener(
+      'characteristicvaluechanged',
+      (event) => {
+        const value = (event.target as BluetoothRemoteGATTCharacteristic).value
+        if (!value) return
+        let decoded: MetricUpdate | undefined
+        try {
+          decoded = parse(value)
+          this.ingest(entry.device.id, decoded)
+        } catch {
+          // A malformed packet must not tear down the notification stream.
+        }
+        // Captured after parsing and outside the try, so a packet that broke the
+        // parser is still kept: that is the one worth having.
+        this.trace.capture(entry.device.id, entry.device.name, String(uuid), value, decoded)
+      },
+      // Dropped the moment this session ends, so a reconnection cannot leave
+      // the previous session's handler on the same characteristic.
+      { signal: entry.session?.signal },
+    )
     await chr.startNotifications()
     return true
   }
@@ -902,11 +1054,39 @@ export class SensorManager {
     }
   }
 
+  /**
+   * Ends one GATT session's subscriptions without touching the link.
+   *
+   * The poll timer goes with them. A polled device used to get a fresh
+   * `setInterval` on every reconnection and keep the old one, so a sensor that
+   * dropped ten times was being read eleven times an interval by the end of the
+   * test, against a device whose whole point is that it is slow.
+   */
+  private closeSession(entry: Entry): void {
+    entry.session?.abort()
+    entry.session = undefined
+    if (entry.pollTimer) {
+      clearInterval(entry.pollTimer)
+      entry.pollTimer = undefined
+    }
+  }
+
+  /** Ends the session and the link with it, leaving nothing half open. */
+  private closeLink(entry: Entry): void {
+    this.closeSession(entry)
+    try {
+      if (entry.gattDevice?.gatt?.connected) entry.gattDevice.gatt.disconnect()
+    } catch {
+      // Already gone.
+    }
+  }
+
   remove(deviceId: string): void {
     const entry = this.entries.get(deviceId)
     if (!entry) return
     this.entries.delete(deviceId)
-    if (entry.pollTimer) clearInterval(entry.pollTimer)
+    this.closeSession(entry)
+    entry.wake?.()
     entry.ftms?.forgetControl()
     try {
       entry.gattDevice?.gatt?.disconnect()
@@ -923,5 +1103,3 @@ export class SensorManager {
     for (const id of [...this.entries.keys()]) this.remove(id)
   }
 }
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))

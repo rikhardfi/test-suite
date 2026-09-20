@@ -75,6 +75,31 @@ the choice per metric in the sensor panel.
 Dropped connections reconnect automatically with backoff. A metric older than five seconds stops being
 displayed rather than showing a stale number.
 
+**Dropouts, and the crank power meter in particular.** A crank-mounted meter — a Quarq, a Power2Max,
+a set of pedals — drops its link far more often than a chest strap does, and it starts doing it the
+moment the athlete starts working: its antenna spends part of every revolution behind a leg, and the
+rider's body is between it and the laptop for half of each one. This is normal radio behaviour and not
+a fault in the meter, so the app is built to ride it out rather than to avoid it:
+
+- **One reconnection at a time per device.** Repeated drops used to start a reconnect loop each, and
+  several of them would then call `connect()` on the same radio at once; the browser settles that by
+  failing all but one, so the more often a meter dropped the less likely it was to come back. Extra
+  drops now join the attempt already running.
+- **A three-second ceiling on the backoff while recording**, against fifteen when idle. The meter is
+  usually advertising again within a second, and every second spent waiting is a second of the power
+  trace coming from the trainer's estimate instead.
+- **A half-open link is thrown away rather than reused.** A link that comes back connected but whose
+  service discovery fails would otherwise be retried down for the rest of the test.
+- **Re-subscribing cannot double up.** Each session's notification handlers are dropped when it ends,
+  so a device that reconnects ten times still reports each packet once.
+- **The device row shows the dropout count**, and **Retry now** works while it is reconnecting rather
+  than being greyed out until it has given up.
+
+A meter that is dropping every few seconds is still worth investigating — a low coin cell and a loose
+battery cover are the usual causes, in that order — and the count in the sensor panel is what tells
+you that is what is happening. Power falling back to the trainer's own estimate is recorded as a
+source change either way, so a trace never silently changes what it is measuring.
+
 ### Browser requirements
 
 Web Bluetooth is implemented in **Chrome, Edge and Opera** on desktop (macOS, Windows, Linux, ChromeOS)

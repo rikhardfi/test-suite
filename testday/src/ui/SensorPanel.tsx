@@ -4,11 +4,32 @@ import { Simulator } from '../ble/simulator'
 import { BluetoothChooser, useBluetoothChooser } from './BluetoothChooser'
 import { useLiveMetrics, useSensorDevices } from './hooks'
 import { metricLabel } from '../ble/metrics'
-import type { MetricKey } from '../ble/types'
+import type { MetricKey, SensorDevice } from '../ble/types'
 import { Modal } from './Modal'
 import { describeProbe, type TrainerResponse } from '../ble/probe'
 import { FlowMeterSection } from './FlowMeterSection'
 
+
+/**
+ * What the link has been doing, when there is anything to say about it.
+ *
+ * A sensor that drops and comes back leaves no trace in the device row: the dot
+ * goes amber for a second or two and then green again, and a meter that did
+ * that forty times over a test looks identical to one that never moved. The
+ * count is the only thing that tells those apart, and it is the difference
+ * between a battery to change and a test to trust.
+ */
+function describeLink(device: SensorDevice): string {
+  const parts: string[] = []
+  if (device.state === 'reconnecting') {
+    const attempts = device.reconnectAttempts ?? 0
+    parts.push(attempts > 1 ? `Reconnecting, attempt ${attempts}` : 'Reconnecting')
+  } else if (device.state === 'disconnected') {
+    parts.push('Gave up; retry to try again')
+  }
+  if (device.drops) parts.push(device.drops === 1 ? '1 dropout' : `${device.drops} dropouts`)
+  return parts.join(' · ')
+}
 
 const SOURCE_METRICS: { key: MetricKey; label: string }[] = [
   { key: 'power', label: 'Power' },
@@ -203,10 +224,13 @@ export function SensorPanel({
               </tr>
             </thead>
             <tbody>
-              {devices.map((device) => (
+              {devices.map((device) => {
+                const link = describeLink(device)
+                return (
                 <tr key={device.id}>
                   <td>
                     <span className={`dot ${device.state}`} /> {device.name}
+                    {link && <div className="muted small">{link}</div>}
                   </td>
                   <td>{device.kind}</td>
                   <td className="muted small">
@@ -221,10 +245,12 @@ export function SensorPanel({
                       <button
                         className="ghost"
                         onClick={() => manager.retry(device.id)}
-                        disabled={device.state === 'reconnecting'}
+                        // Live while it is reconnecting too. That is the state a
+                        // dropped sensor spends all its time in, and it is
+                        // exactly when the operator wants the wait cut short.
                         title="Try this device again now, without waiting for the next backoff"
                       >
-                        {device.state === 'reconnecting' ? 'Reconnecting…' : 'Retry'}
+                        Retry now
                       </button>
                     )}
                     <button
@@ -237,7 +263,8 @@ export function SensorPanel({
                     </button>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         )}

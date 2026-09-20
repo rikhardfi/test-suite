@@ -90,6 +90,17 @@ export interface SensorDevice {
   /** Present only on devices that accept ERG / speed targets. */
   control?: MachineControl
   batteryPct?: number
+  /**
+   * Links lost since the device was paired.
+   *
+   * A crank power meter that drops once is unremarkable; one that drops forty
+   * times in a test is a battery, a magnet or a radio problem, and the only
+   * place that shows is a counter. Kept across reconnections, since resetting
+   * it on every recovery would hide exactly the pattern worth seeing.
+   */
+  drops?: number
+  /** Failed reconnect attempts since the last successful one; 0 when connected. */
+  reconnectAttempts?: number
   disconnect(): void
 }
 

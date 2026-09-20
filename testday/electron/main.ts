@@ -471,8 +471,29 @@ function createWindow(): void {
     detachActive()
   })
 
+  // The one window this app opens for itself is the athlete's screen: the same
+  // page with `#athlete` on it. It only displays, so it gets no preload and no
+  // way to reach the recorder. Anything else asking for a window is refused.
+  contents.setWindowOpenHandler(({ url }) => {
+    const own = url.split('#')[0] === contents.getURL().split('#')[0]
+    if (!own || !url.endsWith('#athlete')) return { action: 'deny' }
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        width: 1280,
+        height: 800,
+        backgroundColor: '#07090d',
+        title: 'testday, athlete',
+        autoHideMenuBar: true,
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      },
+    }
+  })
+
   win.on('closed', () => {
     win = null
+    // An athlete screen with no operator window behind it shows a frozen test.
+    for (const other of BrowserWindow.getAllWindows()) other.close()
   })
 
   if (isDev && DEV_URL) {

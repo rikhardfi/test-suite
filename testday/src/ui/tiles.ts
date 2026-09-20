@@ -63,6 +63,56 @@ const fmt = (value: number | undefined | null, decimals = 0): string | null =>
 const workSamples = (context: TileContext): Sample[] =>
   context.samples.filter((s) => s.stepIndex === context.snapshot.stepIndex && s.phase === 'work')
 
+/** The windows a rolling average is taken over, shortest first. The first is the headline. */
+const ROLLING_WINDOWS_S = [30, 60, 300] as const
+const windowLabel = (seconds: number): string => (seconds < 120 ? `${seconds} s` : `${seconds / 60} min`)
+
+/**
+ * Mean of the last `seconds` recorded samples, or null until there are that
+ * many. The stream is 1 Hz and stops while the test is paused, so a window is
+ * that many seconds of recorded riding, not of wall clock. A window that is not
+ * yet full says nothing, rather than passing off ten seconds as a five-minute
+ * average.
+ */
+function rollingMean(
+  samples: readonly Sample[],
+  seconds: number,
+  pick: (sample: Sample) => number | undefined,
+): number | null {
+  if (samples.length < seconds) return null
+  let sum = 0
+  let count = 0
+  for (let i = samples.length - seconds; i < samples.length; i++) {
+    const value = pick(samples[i])
+    if (value == null || !Number.isFinite(value)) continue
+    sum += value
+    count++
+  }
+  // A window mostly made of dropouts is not an average of the window.
+  return count >= seconds / 2 ? sum / count : null
+}
+
+/** One tile, three windows: the shortest large, the longer two on the line beneath. */
+function rollingTile(
+  context: TileContext,
+  pick: (sample: Sample) => number | undefined,
+  format: (mean: number) => string,
+  unit: string,
+): TileValue | null {
+  const [head, ...rest] = ROLLING_WINDOWS_S.map((seconds) => {
+    const mean = rollingMean(context.samples, seconds, pick)
+    return { seconds, text: mean == null ? null : format(mean) }
+  })
+  if (head.text == null) return null
+  return {
+    value: head.text,
+    unit,
+    note: `${windowLabel(head.seconds)} · ${rest
+      .map((w) => `${windowLabel(w.seconds)} ${w.text ?? '—'}`)
+      .join(' · ')}`,
+  }
+}
+
 export const TILES: readonly TileDef[] = [
   // --- the essentials -------------------------------------------------------
   {
@@ -543,6 +593,31 @@ export const TILES: readonly TileDef[] = [
       if (!values.length) return null
       return { value: (values.reduce((a, b) => a + b, 0) / values.length).toFixed(0), unit: 'bpm' }
     },
+  },
+  // --- rolling averages -----------------------------------------------------
+  {
+    key: 'rollPower',
+    label: 'Power avg',
+    tone: 'power',
+    sport: 'bike',
+    about: 'Rolling average power over the last 30 s, with 60 s and 5 min beneath. Each window appears once it is full.',
+    compute: (c) => rollingTile(c, (s) => s.power, (w) => w.toFixed(0), 'W'),
+  },
+  {
+    key: 'rollHr',
+    label: 'HR avg',
+    tone: 'heart',
+    about: 'Rolling average heart rate over the last 30 s, with 60 s and 5 min beneath. Each window appears once it is full.',
+    compute: (c) => rollingTile(c, (s) => s.heartRate, (bpm) => bpm.toFixed(0), 'bpm'),
+  },
+  {
+    key: 'rollPace',
+    label: 'Pace avg',
+    tone: 'power',
+    sport: 'run',
+    about:
+      'Rolling average pace over the last 30 s, with 60 s and 5 min beneath. Speed is averaged and then turned into pace, which is the pace that covers the distance actually run.',
+    compute: (c) => rollingTile(c, (s) => s.speedMs, paceFromSpeed, '/km'),
   },
 ]
 

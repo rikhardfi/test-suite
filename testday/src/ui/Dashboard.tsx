@@ -5,7 +5,8 @@ import { DurationCurve, type CurveSeries } from './DurationCurve'
 import { Nomogram } from './Nomogram'
 import { LapTable } from './LapTable'
 import { COLORS } from './theme'
-import { useHotkeys, useLiveMetrics, useRunnerSnapshot } from './hooks'
+import { openAthleteWindow, useAthleteFeed } from './athleteLink'
+import { useFullscreen, useHotkeys, useLiveMetrics, useRunnerSnapshot } from './hooks'
 import { defaultFrontFor, tileByKey, tilesForSport, type TileContext, type TileTone } from './tiles'
 import { formatClock, formatCountdown, mmpCurve } from '../model/metrics'
 import { criticalPower } from '../model/analysis'
@@ -46,6 +47,9 @@ interface Props {
   durability: string
   /** Tile keys on the front face, in order. Empty means the defaults. */
   frontTiles: string[]
+  /** Chart value axes fitted to the data rather than starting at zero. */
+  fitY: boolean
+  onFitYChange: (fitY: boolean) => void
   onOpenSensors: () => void
   onEditTiles: () => void
   onEditEnvironment: () => void
@@ -65,6 +69,8 @@ export function Dashboard({
   status,
   durability,
   frontTiles,
+  fitY,
+  onFitYChange,
   onOpenSensors,
   onEditTiles,
   onEditEnvironment,
@@ -286,6 +292,16 @@ export function Dashboard({
 
   const running = snapshot.state === 'running'
 
+  const [fullscreen, toggleFullscreen] = useFullscreen()
+  const shownTiles = useMemo(
+    () => (frontTiles.length ? frontTiles : defaultFrontFor(protocol.sport)),
+    [frontTiles, protocol.sport],
+  )
+  useAthleteFeed(
+    { protocol, athlete, snapshot, metrics, tiles: shownTiles, fitY, cp, rr, conditions },
+    samples,
+  )
+
   return (
     <>
       {motion.alarming && (
@@ -340,6 +356,21 @@ export function Dashboard({
           <span>{athlete.ftpWatts} W FTP</span>
           <span>{new Date().toLocaleDateString(undefined, { dateStyle: 'medium' })}</span>
         </div>
+        <button
+          className="ghost small"
+          onClick={openAthleteWindow}
+          title="Opens a second window with the tiles and the workout graph and no controls. Drag it to the athlete's monitor and put it full screen."
+        >
+          Athlete screen
+        </button>
+        <button
+          className={`ghost small${fullscreen ? ' on' : ''}`}
+          aria-pressed={fullscreen}
+          onClick={toggleFullscreen}
+          title="Full screen, without the navigation bar. Esc leaves it."
+        >
+          Full screen
+        </button>
         <span className="spacer" />
         <PowerSources snapshot={snapshot} agreement={agreement} manager={manager} />
         {snapshot.controlError && (
@@ -393,9 +424,6 @@ export function Dashboard({
 
       <section className="panel graph-panel">
         <div className="panel-head">
-          <span className={`pill ${running ? 'live' : ''}`}>
-            {snapshot.state === 'finished' ? 'DONE' : running ? 'ACTIVE' : snapshot.state.toUpperCase()}
-          </span>
           <strong>{snapshot.step?.name ?? 'Step'}</strong>
           <span className="muted">
             {snapshot.step ? stepLabel(snapshot.step, athlete.ftpWatts, athlete.economyPct ?? 100) : ''} ·{' '}
@@ -403,9 +431,16 @@ export function Dashboard({
           </span>
           <span className="spacer" />
           <span className="muted">Workout graph</span>
+          <YAxisToggle fitY={fitY} onChange={onFitYChange} />
         </div>
         <ErrorBoundary label="Workout graph">
-          <WorkoutGraph protocol={protocol} athlete={athlete} samples={samples} elapsedS={snapshot.elapsedS} />
+          <WorkoutGraph
+            protocol={protocol}
+            athlete={athlete}
+            samples={samples}
+            elapsedS={snapshot.elapsedS}
+            fitY={fitY}
+          />
         </ErrorBoundary>
       </section>
 
@@ -414,9 +449,11 @@ export function Dashboard({
           <>
             <div className="panel-head">
               <span className="muted">Live MMP curve (watt)</span>
+              <span className="spacer" />
+              <YAxisToggle fitY={fitY} onChange={onFitYChange} />
             </div>
             <ErrorBoundary label="MMP curve">
-              <DurationCurve series={curves} />
+              <DurationCurve series={curves} fitY={fitY} />
             </ErrorBoundary>
           </>
         ) : (
@@ -426,6 +463,7 @@ export function Dashboard({
                 {runView === 'nomogram' ? 'Pace · gradient · VO₂' : 'Flat-equivalent speed (km/h)'}
               </span>
               <span className="spacer" />
+              <YAxisToggle fitY={fitY} onChange={onFitYChange} />
               <div className="segmented small">
                 <button
                   className={runView === 'nomogram' ? 'on' : 'ghost'}
@@ -450,9 +488,10 @@ export function Dashboard({
                   }
                   economyPct={athlete.economyPct ?? 100}
                   vo2max={athlete.vo2maxMlKgMin}
+                  fitY={fitY}
                 />
               ) : (
-                <DurationCurve series={runCurves} decimals={1} minTop={12} />
+                <DurationCurve series={runCurves} decimals={1} minTop={12} fitY={fitY} />
               )}
             </ErrorBoundary>
           </>
@@ -561,6 +600,28 @@ export function Dashboard({
  * and it offers the two ways out: stop the machine, or start the test that
  * should have been running.
  */
+/**
+ * One switch, shown on every chart it moves. From zero a chart shows
+ * proportion; fitted, it shows the differences. Both are true, and the button
+ * says which one is on the screen.
+ */
+function YAxisToggle({ fitY, onChange }: { fitY: boolean; onChange: (fitY: boolean) => void }) {
+  return (
+    <button
+      className={`ghost small${fitY ? ' on' : ''}`}
+      aria-pressed={fitY}
+      onClick={() => onChange(!fitY)}
+      title={
+        fitY
+          ? 'The value axis starts just under the data. Click to start it at zero.'
+          : 'The value axis starts at zero. Click to fit it to the data.'
+      }
+    >
+      {fitY ? 'Y fitted' : 'Y from 0'}
+    </button>
+  )
+}
+
 /** Past this the machine is behind, rather than merely being commanded. */
 const CONTROL_BEHIND_WARN_S = 5
 
@@ -704,7 +765,7 @@ function MotionAlarm({
   )
 }
 
-function Tile({
+export function Tile({
   label,
   value,
   unit,

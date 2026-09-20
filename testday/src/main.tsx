@@ -1,7 +1,9 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { AthleteScreen } from './ui/AthleteScreen'
 import { ErrorBoundary } from './ui/ErrorBoundary'
+import { isAthleteWindow } from './ui/athleteLink'
 import './styles.css'
 
 const root = document.getElementById('root')
@@ -35,7 +37,8 @@ createRoot(root).render(
         </div>
       )}
     >
-      <App />
+      {/* The athlete window only displays: no sensors, no runner, no recorder. */}
+      {isAthleteWindow() ? <AthleteScreen /> : <App />}
     </ErrorBoundary>
   </StrictMode>,
 )

@@ -212,3 +212,35 @@ describe('the inspired water tile', () => {
   })
 })
 
+
+describe('rolling averages', () => {
+  const ride = (seconds: number, power: (t: number) => number) =>
+    Array.from({ length: seconds }, (_, t) => sample({ t, power: power(t), heartRate: 150, speedMs: 4 }))
+
+  it('stays hidden until the shortest window is full', () => {
+    expect(compute('rollPower', context({ samples: ride(29, () => 200) }))).toBeNull()
+    expect(compute('rollPower', context({ samples: ride(30, () => 200) }))?.value).toBe('200')
+  })
+
+  it('leaves a longer window blank rather than averaging less than it claims', () => {
+    const tile = compute('rollPower', context({ samples: ride(90, () => 200) }))
+    expect(tile?.note).toBe('30 s · 60 s 200 · 5 min —')
+  })
+
+  it('averages each window over its own span', () => {
+    // 270 s at 100 W, then 30 s at 300 W.
+    const tile = compute('rollPower', context({ samples: ride(300, (t) => (t < 270 ? 100 : 300)) }))
+    expect(tile?.value).toBe('300')
+    expect(tile?.note).toBe('30 s · 60 s 200 · 5 min 120')
+  })
+
+  it('averages speed and reports it as pace', () => {
+    const tile = compute('rollPace', context({ protocol: protocol('run'), samples: ride(30, () => 0) }))
+    expect(tile).toMatchObject({ value: '4:10', unit: '/km' })
+  })
+
+  it('says nothing when most of the window is dropouts', () => {
+    const samples = ride(30, () => 200).map((s, i) => (i < 20 ? { ...s, heartRate: undefined } : s))
+    expect(compute('rollHr', context({ samples }))).toBeNull()
+  })
+})

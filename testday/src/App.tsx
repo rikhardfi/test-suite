@@ -570,6 +570,8 @@ export default function App() {
                 dashboardLayout: { ...s.dashboardLayout, [activeProtocol.sport]: split },
               }))
             }
+            fitY={settings.fitYAxis ?? false}
+            onFitYChange={(fitYAxis) => setSettings((s) => ({ ...s, fitYAxis }))}
             onOpenSensors={() => setSensorsOpen(true)}
             onEditTiles={() => setTilesOpen(true)}
             onEditEnvironment={() => setEnvironmentOpen(true)}

@@ -59,12 +59,28 @@ export const FONT = {
 } as const
 
 /** Even ~1-2-5 tick steps spanning a range. */
-export function niceTicks(min: number, max: number, count = 5): number[] {
-  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return [min]
-  const rawStep = (max - min) / count
+function niceStep(rawStep: number): number {
   const magnitude = 10 ** Math.floor(Math.log10(rawStep))
   const normalised = rawStep / magnitude
-  const step = (normalised >= 5 ? 10 : normalised >= 2 ? 5 : normalised >= 1 ? 2 : 1) * magnitude
+  return (normalised >= 5 ? 10 : normalised >= 2 ? 5 : normalised >= 1 ? 2 : 1) * magnitude
+}
+
+/**
+ * Where a value axis starts. From zero a chart shows proportion, which is the
+ * honest default; fitted, it starts a little under the lowest value that
+ * matters, so a step test between 250 and 330 W fills the panel instead of its
+ * top third. The floor is snapped down to a round number at half the tick
+ * spacing, so the axis never opens on an odd one and never wastes a whole tick.
+ */
+export function axisFloor(fit: boolean, lowest: number, top: number, count = 4): number {
+  if (!fit || !Number.isFinite(lowest) || !Number.isFinite(top) || lowest <= 0 || lowest >= top) return 0
+  const step = niceStep((top - lowest) / (count * 2))
+  return Math.max(0, Math.floor((lowest - (top - lowest) * 0.05) / step) * step)
+}
+
+export function niceTicks(min: number, max: number, count = 5): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return [min]
+  const step = niceStep((max - min) / count)
 
   const ticks: number[] = []
   for (let t = Math.ceil(min / step) * step; t <= max + step * 0.001; t += step) {

@@ -70,7 +70,8 @@
    */
   --danger: var(--orange);
 
-  --radius: 10px;
+  /* Square. Every corner in the app reads this, so it is the one place to change it. */
+  --radius: 0;
   --mono: 'Roboto Mono', 'Consolas', ui-monospace, monospace;
   --sans: 'Roboto', 'Arial', system-ui, -apple-system, sans-serif;
   color-scheme: dark;
@@ -156,7 +157,7 @@ button {
   color: var(--text);
   background: var(--panel-2);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 7px 12px;
   cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease;
@@ -200,7 +201,7 @@ button.dashed {
   min-width: 18px;
   margin-left: 6px;
   padding: 0 5px;
-  border-radius: 9px;
+  border-radius: var(--radius);
   background: var(--line);
   font-family: var(--mono);
   font-size: 11px;
@@ -212,7 +213,7 @@ select {
   color: var(--text);
   background: #1e2740;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius);
   padding: 6px 9px;
   width: 100%;
 }
@@ -239,7 +240,7 @@ kbd {
   font-size: 11px;
   background: var(--panel-2);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--radius);
   padding: 1px 5px;
 }
 
@@ -298,7 +299,7 @@ kbd {
 }
 
 .split {
-  border-radius: 3px;
+  border-radius: var(--radius);
   background: transparent;
   transition: background 120ms ease;
   /* Above the panels either side, so nothing can end up on top of the grip. */
@@ -549,7 +550,7 @@ button.small {
   font-size: 10px;
   letter-spacing: 0.1em;
   padding: 2px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--line);
   color: var(--muted);
 }
@@ -693,12 +694,12 @@ tr.done td {
   text-align: center;
   padding: 6px 8px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .banner {
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   font-size: 13px;
   display: flex;
   gap: 12px;
@@ -719,7 +720,7 @@ tr.done td {
   transform: translateX(-50%);
   background: var(--panel-2);
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 9px 16px;
   font-size: 13px;
   z-index: 50;
@@ -805,7 +806,7 @@ tr.done td {
   text-transform: uppercase;
   color: var(--muted);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: var(--radius);
   padding: 1px 6px;
 }
 .card dl,
@@ -902,7 +903,7 @@ tr.done td {
 .modal {
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-radius: 14px;
+  border-radius: var(--radius);
   padding: 20px;
   width: min(760px, 100%);
   max-height: 90vh;
@@ -961,7 +962,7 @@ tr.done td {
   font-family: var(--mono);
   padding: 10px 12px;
   background: var(--panel-2);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .segmented {
   display: flex;
@@ -1307,7 +1308,7 @@ input.invalid {
   flex-wrap: wrap;
   padding: 1px 8px;
   background: var(--panel-2);
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 12px;
   font-family: var(--mono);
 }
@@ -1325,4 +1326,49 @@ input.invalid {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+/* --- full screen, and the athlete's screen -------------------------------- */
+
+/* Full screen is for the test, not for getting around the app. */
+:root.fullscreen .tabs {
+  display: none;
+}
+
+/*
+ * The second window: the operator's tiles and the plan, read from a bike or a
+ * treadmill two metres away. No controls, so nothing here takes a click.
+ */
+.athlete-screen {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 3fr) minmax(160px, 2fr);
+  gap: 10px;
+  padding: 10px;
+  overflow: hidden;
+}
+.athlete-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-size: clamp(16px, 2vw, 28px);
+}
+.athlete-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(clamp(220px, 24vw, 420px), 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  align-content: stretch;
+  overflow: hidden;
+}
+/* Sized against both edges: four tiles across and three down have to fit. */
+.athlete-tiles .tile-value {
+  font-size: clamp(32px, min(5.2vw, 9.5vh), 120px);
+}
+.athlete-tiles .tile-label,
+.athlete-tiles .tile-note {
+  font-size: clamp(11px, 1.1vw, 18px);
+}
+.athlete-graph {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }

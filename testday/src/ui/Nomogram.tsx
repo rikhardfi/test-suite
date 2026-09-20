@@ -1,5 +1,5 @@
 import { useCanvas } from './hooks'
-import { COLORS, FONT, niceTicks } from './theme'
+import { COLORS, FONT, axisFloor, niceTicks } from './theme'
 import { nomogramCurves } from '../model/running'
 import { computeVo2, solveInclineForVo2, solveSpeedForVo2 } from '../model/vo2'
 
@@ -25,7 +25,10 @@ export function Nomogram({
   inclinePct,
   economyPct = 100,
   vo2max,
+  fitY = false,
 }: {
+  /** Start the oxygen-cost axis just under the cheapest plotted pace rather than at zero. */
+  fitY?: boolean
   speedKph: number | null
   inclinePct: number | null
   economyPct?: number
@@ -45,13 +48,14 @@ export function Nomogram({
         vo2max ? vo2max * 1.1 : 0,
         ...curves.flatMap((c) => c.points.map((p) => p.vo2)),
       )
+      const minVo2 = axisFloor(fitY, Math.min(...curves.flatMap((c) => c.points.map((p) => p.vo2))), maxVo2, 5)
       const x = (kph: number) => PAD.left + ((kph - FROM_KPH) / (TO_KPH - FROM_KPH)) * plotW
-      const y = (vo2: number) => PAD.top + plotH - (vo2 / maxVo2) * plotH
+      const y = (vo2: number) => PAD.top + plotH - ((vo2 - minVo2) / (maxVo2 - minVo2)) * plotH
 
       ctx.font = `9px ${FONT.mono}`
 
       // Oxygen cost up the side.
-      for (const tick of niceTicks(0, maxVo2, 5)) {
+      for (const tick of niceTicks(minVo2, maxVo2, 5)) {
         const py = Math.round(y(tick)) + 0.5
         ctx.strokeStyle = COLORS.grid
         ctx.beginPath()
@@ -140,7 +144,7 @@ export function Nomogram({
         ctx.fill()
       }
     },
-    [curves, speedKph, inclinePct, economyPct, vo2max],
+    [curves, speedKph, inclinePct, economyPct, vo2max, fitY],
   )
 
   const vo2 =

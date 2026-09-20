@@ -1,5 +1,5 @@
 import { useCanvas } from './hooks'
-import { COLORS, FONT, niceTicks } from './theme'
+import { COLORS, FONT, axisFloor, niceTicks } from './theme'
 
 export interface CurveSeries {
   label: string
@@ -30,7 +30,10 @@ export function DurationCurve({
   series,
   decimals = 0,
   minTop = 100,
+  fitY = false,
 }: {
+  /** Start the value axis just under the lowest point rather than at zero. */
+  fitY?: boolean
   series: CurveSeries[]
   /** Decimals on the value axis. Speed needs one; watts do not. */
   decimals?: number
@@ -45,17 +48,18 @@ export function DurationCurve({
 
       const all = series.flatMap((s) => s.points)
       const maxValue = Math.max(minTop, ...all.map((p) => p.value)) * 1.1
+      const minValue = axisFloor(fitY, Math.min(...all.map((p) => p.value).filter((v) => v > 0)), maxValue)
       const minS = 1
       const maxS = 7200
 
       const x = (d: number) =>
         PAD.left + ((Math.log(Math.max(minS, d)) - Math.log(minS)) / (Math.log(maxS) - Math.log(minS))) * plotW
-      const y = (v: number) => PAD.top + plotH - (v / maxValue) * plotH
+      const y = (v: number) => PAD.top + plotH - ((v - minValue) / (maxValue - minValue)) * plotH
 
       ctx.font = `9px ${FONT.mono}`
       ctx.strokeStyle = COLORS.grid
       ctx.lineWidth = 1
-      for (const tick of niceTicks(0, maxValue, 4)) {
+      for (const tick of niceTicks(minValue, maxValue, 4)) {
         const py = Math.round(y(tick)) + 0.5
         ctx.beginPath()
         ctx.moveTo(PAD.left, py)
@@ -97,7 +101,7 @@ export function DurationCurve({
       }
       ctx.setLineDash([])
     },
-    [series, decimals, minTop],
+    [series, decimals, minTop, fitY],
   )
 
   return (

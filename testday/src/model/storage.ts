@@ -154,6 +154,12 @@ export interface Settings {
     run?: { colsPct: number; rowsPct: number }
   }
   /**
+   * Chart value axes start just under the data instead of at zero. One switch
+   * for all three dashboard charts: two charts side by side on different
+   * footings is how a small difference gets read as a large one.
+   */
+  fitYAxis?: boolean
+  /**
    * Sensors paired on this machine and which metric each was assigned to.
    * Re-deciding this at the start of every test day is the kind of setup that
    * gets skipped once and then yields a trace from the wrong device.

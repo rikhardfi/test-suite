@@ -93,3 +93,36 @@ export function useHotkeys(handlers: Record<string, () => void>): void {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 }
+
+/**
+ * Full screen for this window, and whether it is on.
+ *
+ * Two things happen: the navigation bar goes, and the window is asked to take
+ * the whole display. The first is ours and always works. The second is the
+ * browser's to grant, and it may refuse; the button still has to do something
+ * and still has to undo it. Esc leaves full screen without asking us, so the
+ * flag follows the document out.
+ */
+export function useFullscreen(): [boolean, () => void] {
+  const [on, setOn] = useState(() => document.fullscreenElement != null)
+  useEffect(() => {
+    const sync = () => {
+      if (document.fullscreenElement == null) setOn(false)
+    }
+    document.addEventListener('fullscreenchange', sync)
+    return () => document.removeEventListener('fullscreenchange', sync)
+  }, [])
+  useEffect(() => {
+    document.documentElement.classList.toggle('fullscreen', on)
+    return () => document.documentElement.classList.remove('fullscreen')
+  }, [on])
+  const toggle = () => {
+    setOn(!on)
+    if (on) {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+    } else {
+      void document.documentElement.requestFullscreen().catch(() => {})
+    }
+  }
+  return [on, toggle]
+}

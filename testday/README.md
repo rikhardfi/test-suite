@@ -29,6 +29,18 @@ The clock, the steps and the recording carry on, so switching it off drops back 
 due. Every switch and every change of watts goes into the journal as a `freeRide` event, because for
 that stretch the load was the rider's and not the protocol's.
 
+**Two screens.** *Athlete screen* in the dashboard head opens a second window with the operator's
+tiles, large, and the workout graph, and nothing that can be pressed except full screen. Drag it to
+the athlete's monitor. It holds no runner, no sensors and no recorder: the operator window feeds it
+over a `BroadcastChannel`, samples as they are recorded, and a window opened mid-test asks for the
+whole record once. The desktop app allows exactly this one window and refuses any other. *Full
+screen* hides the navigation bar and takes the display; Esc leaves it.
+
+**Rolling averages.** Three tiles in the picker, *Power avg*, *HR avg* and *Pace avg*: the last 30 s
+large, 60 s and 5 min beneath. A window shows nothing until it is full, and pace is averaged as speed
+first. **Y from 0 / Y fitted** on each dashboard chart switches all three between an axis that starts
+at zero and one that starts just under the lowest step.
+
 **Two power sources, and a trainer that is told what to do about them.** Pair a power meter as well
 as the trainer and both traces are recorded side by side, never blended, with the bias and drift
 between them live on the dashboard. Optionally the trainer is then commanded a corrected figure so

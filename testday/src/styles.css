@@ -330,7 +330,12 @@ kbd {
   grid-area: head;
   display: flex;
   align-items: baseline;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+/* A control error is a row of its own, under the names rather than among them. */
+.dash-head .banner {
+  flex: 1 0 100%;
 }
 .brand {
   font-family: var(--mono);
@@ -1290,29 +1295,25 @@ input.invalid {
 
 /*
  * The operator's question during a test is not what the power is but whether it
- * is real, and one trace cannot answer that. Sits under the head, quiet while
- * the two sources agree and loud when they stop.
+ * is real, and one trace cannot answer that. Rides in the head, quiet while
+ * the two sources agree and loud when they stop. It must stay inside a placed
+ * grid item: loose in the dashboard grid it is auto-placed into the 6px
+ * divider column and wraps one word to a line.
  */
 .power-sources {
   display: flex;
-  gap: 16px;
+  gap: 4px 14px;
   align-items: baseline;
   flex-wrap: wrap;
-  padding: 6px 12px;
+  padding: 1px 8px;
   background: var(--panel-2);
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: 6px;
+  font-size: 12px;
   font-family: var(--mono);
 }
 .power-sources.warn {
   border: 1px solid var(--orange);
   border-left-width: 3px;
-}
-.power-sources .label {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 11px;
-  opacity: 0.6;
 }
 .power-sources .flag {
   color: var(--orange);

@@ -16,6 +16,7 @@ const context = (over: Partial<TileContext> = {}): TileContext => ({
     phaseRemainingS: 235,
     stepProgress: 0.2,
     intensityPct: 100,
+    freeRideWatts: null,
     targetPower: 200,
     targetKph: null,
     commandedPower: null,

@@ -267,6 +267,37 @@ describe('TestRunner', () => {
     runner.finish()
   })
 
+  /**
+   * Free ride sets the protocol's watts aside without stopping its clock, so
+   * switching it off has to land on the step that is due, not the one it left.
+   */
+  it('holds the rider\'s watts in free ride and returns to the protocol after', async () => {
+    const { runner, machine } = build()
+    runner.start()
+    await advance(2)
+    runner.toggleFreeRide()
+    expect(runner.snapshot().freeRideWatts).toBe(200)
+    runner.adjustFreeRide(25)
+    runner.adjustFreeRide(-5)
+    await advance(2)
+    expect(runner.snapshot().targetPower).toBe(220)
+    expect(machine.powerCommands.at(-1)).toBe(220)
+    const elapsed = runner.snapshot().elapsedS
+    expect(elapsed).toBeGreaterThanOrEqual(4)
+    runner.toggleFreeRide()
+    await advance(2)
+    expect(runner.snapshot().freeRideWatts).toBeNull()
+    expect(machine.powerCommands.at(-1)).toBe(200)
+    runner.finish()
+  })
+
+  it('never asks for negative watts in free ride', () => {
+    const { runner } = build()
+    runner.setFreeRide(10)
+    runner.adjustFreeRide(-25)
+    expect(runner.snapshot().freeRideWatts).toBe(0)
+  })
+
   it('skips forward and backward between steps', async () => {
     const { runner } = build()
     runner.start()
@@ -680,6 +711,17 @@ describe('the protocol as executed', () => {
     runner.adjustIntensity(-3)
     expect(events.find((e) => e.kind === 'jump')?.data?.stepIndex).toBe(2)
     expect(events.find((e) => e.kind === 'intensity')?.data?.pct).toBe(97)
+  })
+
+  it('records free ride going on, changing and going off', () => {
+    const { runner, events } = withEvents()
+    runner.start()
+    runner.toggleFreeRide()
+    runner.adjustFreeRide(5)
+    runner.toggleFreeRide()
+    const free = events.filter((e) => e.kind === 'freeRide')
+    expect(free.map((e) => e.data?.on)).toEqual([true, true, false])
+    expect(free[1].data?.watts).toBe(205)
   })
 
   /** A trim that changes nothing is not a thing that happened. */

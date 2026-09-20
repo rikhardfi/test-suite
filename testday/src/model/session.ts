@@ -207,6 +207,8 @@ export interface RunnerSnapshot {
   phaseRemainingS: number
   stepProgress: number
   intensityPct: number
+  /** The watts the rider has chosen, when free ride has set the protocol aside. */
+  freeRideWatts: number | null
   targetPower: number | null
   targetKph: number | null
   /** What the machine was last told, when a correction is changing it. */
@@ -270,6 +272,12 @@ export type RunnerEventKind =
   | 'jump'
   | 'intensity'
   /**
+   * Free ride switched on or off, or its watts changed. While it is on the
+   * load is the rider's and not the protocol's, and a record that did not say
+   * so would show a step ridden at the wrong power with no explanation.
+   */
+  | 'freeRide'
+  /**
    * The power correction, in full. A closed loop that cannot be reconstructed
    * afterwards has no business driving an athlete, so every calibration, every
    * trim, every time the clamp bit and every stretch spent holding a factor
@@ -307,6 +315,8 @@ const SPEED_EPSILON_KPH = 0.05
  * four, so this is past anything that resolves on its own.
  */
 const CONTROL_BEHIND_S = 5
+/** Where free ride starts when there is neither a target nor a power reading. */
+const FREE_RIDE_START_W = 100
 
 /**
  * Drives a protocol in real time: advances steps, computes the current target,
@@ -336,6 +346,7 @@ export class TestRunner {
   private stepIndex = 0
   private stepElapsedS = 0
   private intensity = 1
+  private freeWatts: number | null = null
   private controlError: string | null = null
 
   private lastSentWatts: number | null = null
@@ -545,6 +556,39 @@ export class TestRunner {
 
   adjustIntensity(deltaPct: number): void {
     this.setIntensity(Math.round(this.intensity * 100) + deltaPct)
+  }
+
+  /**
+   * Free ride: the trainer stays in ERG, holding the watts the rider asks for
+   * instead of the protocol's. The clock, the steps and the recording carry on
+   * untouched, so switching it off drops back into the step that is due.
+   */
+  setFreeRide(watts: number | null): void {
+    if (this.protocol.sport !== 'bike') return
+    const range = this.machine()?.powerRange
+    const next =
+      watts === null ? null : Math.round(Math.min(range?.max ?? 2000, Math.max(range?.min ?? 0, watts)))
+    if (next === this.freeWatts) return
+    this.freeWatts = next
+    this.lastSentWatts = null
+    this.onEvent?.('freeRide', {
+      on: next !== null,
+      watts: next ?? '',
+      stepIndex: this.stepIndex,
+      elapsedS: Math.round(this.elapsedS),
+    })
+    this.emit()
+  }
+
+  /** Starts from the load already on the pedals, so switching on changes nothing. */
+  toggleFreeRide(): void {
+    if (this.freeWatts !== null) return this.setFreeRide(null)
+    const riding = this.readMetrics().power
+    this.setFreeRide(this.targetPower ?? (riding != null ? Math.round(riding / 5) * 5 : FREE_RIDE_START_W))
+  }
+
+  adjustFreeRide(deltaW: number): void {
+    if (this.freeWatts !== null) this.setFreeRide(this.freeWatts + deltaW)
   }
 
   // --- lactate ------------------------------------------------------------
@@ -819,6 +863,7 @@ export class TestRunner {
    * not the runner's.
    */
   get targetPower(): number | null {
+    if (this.freeWatts !== null) return this.freeWatts
     const step = this.currentStep
     if (!step) return null
     if (this.phase === 'break') {
@@ -858,6 +903,7 @@ export class TestRunner {
       phaseRemainingS: Math.max(0, phaseRemainingS),
       stepProgress: step ? Math.min(1, this.stepElapsedS / stepTotalS(step)) : 0,
       intensityPct: Math.round(this.intensity * 100),
+      freeRideWatts: this.freeWatts,
       targetPower: this.targetPower,
       targetKph: this.targetKph,
       commandedPower: this.lastSentWatts,

@@ -50,6 +50,8 @@ export type JournalEventKind =
   | 'resume'
   | 'jump'
   | 'intensity'
+  /** Free ride on, off, or its watts changed: the load was the rider's, not the protocol's. */
+  | 'freeRide'
   | 'resumedFromDisk'
   /** A metric changed hands between devices, or started or stopped arriving. */
   | 'sourceChanged'

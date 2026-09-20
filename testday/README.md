@@ -23,6 +23,12 @@ sampling break — an easy spin at the end of the stage during which the dashboa
 lactate value. Global intensity trim (±1%), step skip, pause, and a lap table you can double-click to
 jump around in.
 
+**Free ride.** On a bike, the *Free ride* button sets the protocol's target aside and keeps the trainer
+in ERG at watts the rider chooses (−25, −5, +5, +25), starting from the load already on the pedals.
+The clock, the steps and the recording carry on, so switching it off drops back into the step that is
+due. Every switch and every change of watts goes into the journal as a `freeRide` event, because for
+that stretch the load was the rider's and not the protocol's.
+
 **Two power sources, and a trainer that is told what to do about them.** Pair a power meter as well
 as the trainer and both traces are recorded side by side, never blended, with the bias and drift
 between them live on the dashboard. Optionally the trainer is then commanded a corrected figure so

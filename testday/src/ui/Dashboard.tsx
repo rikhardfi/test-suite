@@ -340,18 +340,15 @@ export function Dashboard({
           <span>{athlete.ftpWatts} W FTP</span>
           <span>{new Date().toLocaleDateString(undefined, { dateStyle: 'medium' })}</span>
         </div>
+        <span className="spacer" />
+        <PowerSources snapshot={snapshot} agreement={agreement} manager={manager} />
+        {snapshot.controlError && (
+          <div className="banner error">
+            Machine control: {explainControlError(snapshot.controlError)}
+            <button onClick={onOpenSensors}>Sensors</button>
+          </div>
+        )}
       </header>
-
-      {snapshot.controlError && (
-        <div className="banner error">
-          Machine control: {explainControlError(snapshot.controlError)}
-          <button onClick={onOpenSensors}>Sensors</button>
-        </div>
-      )}
-
-      <MachineControlLine snapshot={snapshot} />
-
-      <PowerSources snapshot={snapshot} agreement={agreement} manager={manager} />
 
       <section className="tile-face">
         <div className="face-head">
@@ -485,12 +482,33 @@ export function Dashboard({
       </section>
 
       <footer className="controls">
-        <div className="group">
-          <span className="group-label">Intensity</span>
-          <button onClick={() => runner.adjustIntensity(-1)}>−1%</button>
-          <span className="readout">{snapshot.intensityPct}%</span>
-          <button onClick={() => runner.adjustIntensity(1)}>+1%</button>
-        </div>
+        {snapshot.freeRideWatts === null ? (
+          <div className="group">
+            <span className="group-label">Intensity</span>
+            <button onClick={() => runner.adjustIntensity(-1)}>−1%</button>
+            <span className="readout">{snapshot.intensityPct}%</span>
+            <button onClick={() => runner.adjustIntensity(1)}>+1%</button>
+          </div>
+        ) : (
+          <div className="group">
+            <span className="group-label">Watts</span>
+            <button onClick={() => runner.adjustFreeRide(-25)}>−25</button>
+            <button onClick={() => runner.adjustFreeRide(-5)}>−5</button>
+            <span className="readout">{snapshot.freeRideWatts} W</span>
+            <button onClick={() => runner.adjustFreeRide(5)}>+5</button>
+            <button onClick={() => runner.adjustFreeRide(25)}>+25</button>
+          </div>
+        )}
+        {protocol.sport === 'bike' && (
+          <button
+            className={snapshot.freeRideWatts === null ? '' : 'on'}
+            aria-pressed={snapshot.freeRideWatts !== null}
+            onClick={() => runner.toggleFreeRide()}
+            title="Set the protocol's target aside and hold the watts you choose. The clock and the steps keep running."
+          >
+            Free ride
+          </button>
+        )}
 
         <div className="group">
           <span className="group-label">Workout</span>
@@ -543,12 +561,16 @@ export function Dashboard({
  * and it offers the two ways out: stop the machine, or start the test that
  * should have been running.
  */
+/** Past this the machine is behind, rather than merely being commanded. */
+const CONTROL_BEHIND_WARN_S = 5
+
 /**
  * The two power sources, and what the correction is doing about them.
  *
  * The operator's question during a test is not "what is the power" but "is the
  * power real". One trace cannot answer that. Shown only when there is something
- * to say: two sources reporting, or a correction in force.
+ * to say: two sources reporting, a correction in force, or the machine's own
+ * word on the target. One line, in the head, so it costs the dashboard no row.
  *
  * Drift is the number worth watching. A steady bias is a drivetrain and is
  * uninteresting; a bias that moves is the athlete's actual load changing under
@@ -566,7 +588,9 @@ function PowerSources({
 }) {
   const pair = manager.powerPair()
   const correcting = snapshot.powerMatchFactor != null && snapshot.powerMatchFactor !== 1
-  if (!agreement && !correcting) return null
+  const ack = snapshot.controlAck
+  const behind = snapshot.controlBehindS >= CONTROL_BEHIND_WARN_S
+  if (!agreement && !correcting && !ack && !behind) return null
 
   const drift = agreement?.driftPctPerHour
   // Two percent is the accuracy most trainers claim for themselves, so a bias
@@ -574,9 +598,17 @@ function PowerSources({
   const biasOff = agreement != null && Math.abs(agreement.biasPct) > 2
   const driftOff = drift != null && Math.abs(drift) > 2
 
+  const wanted =
+    (snapshot.commandedPower ?? snapshot.targetPower) != null
+      ? `${snapshot.commandedPower ?? snapshot.targetPower} W`
+      : snapshot.targetKph != null
+        ? `${snapshot.targetKph.toFixed(1)} km/h`
+        : 'the target'
+  const confirmed = ack ? `${ack.unit === 'W' ? ack.value : ack.value.toFixed(1)} ${ack.unit}` : null
+  const warn = behind || snapshot.powerMatchState === 'holding'
+
   return (
-    <div className={`power-sources${snapshot.powerMatchState === 'holding' ? ' warn' : ''}`}>
-      <span className="label">Power</span>
+    <div className={`power-sources${warn ? ' warn' : ''}`}>
       {pair.reference && (
         <span>
           <strong>{Math.round(pair.reference.watts)} W</strong> {pair.reference.name}
@@ -607,36 +639,12 @@ function PowerSources({
       {snapshot.powerMatchState === 'holding' && (
         <strong className="flag">reference meter missing, correction held</strong>
       )}
-    </div>
-  )
-}
-
-/** Past this the machine is behind, rather than merely being commanded. */
-const CONTROL_BEHIND_WARN_S = 5
-
-/**
- * What the machine last confirmed, against what it is being asked for.
- *
- * The target tile shows the request. Nothing else on the screen says whether
- * the machine took it, and a machine that has stopped taking targets looks,
- * from here, exactly like one that is holding them.
- */
-function MachineControlLine({ snapshot }: { snapshot: RunnerSnapshot }) {
-  const ack = snapshot.controlAck
-  const behind = snapshot.controlBehindS >= CONTROL_BEHIND_WARN_S
-  if (!ack && !behind) return null
-
-  const wanted =
-    (snapshot.commandedPower ?? snapshot.targetPower) != null
-      ? `${snapshot.commandedPower ?? snapshot.targetPower} W`
-      : snapshot.targetKph != null
-        ? `${snapshot.targetKph.toFixed(1)} km/h`
-        : 'the target'
-  const confirmed = ack ? `${ack.unit === 'W' ? ack.value : ack.value.toFixed(1)} ${ack.unit}` : null
-
-  return (
-    <div className={`power-sources${behind ? ' warn' : ''}`}>
-      <span className="label">Machine</span>
+      {/*
+       * What the machine last confirmed, against what it is being asked for.
+       * The target tile shows the request. Nothing else on the screen says
+       * whether the machine took it, and a machine that has stopped taking
+       * targets looks, from here, exactly like one that is holding them.
+       */}
       {behind ? (
         <strong className="flag">
           {wanted} not confirmed for {Math.round(snapshot.controlBehindS)} s
@@ -644,8 +652,8 @@ function MachineControlLine({ snapshot }: { snapshot: RunnerSnapshot }) {
         </strong>
       ) : (
         ack && (
-          <span className="muted">
-            {confirmed} confirmed {new Date(ack.at).toLocaleTimeString()}
+          <span className="muted" title={`Machine confirmed ${new Date(ack.at).toLocaleTimeString()}`}>
+            ✓ {confirmed}
           </span>
         )
       )}

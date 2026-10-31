@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FLOW_METER_ID, FlowMeterDevice } from '../ble/flowMeter'
 import type { SensorManager } from '../ble/manager'
-import type { FlowMeterStatus } from '../model/flow'
+import { CIRCUIT_MARKERS, type FlowMeterStatus } from '../model/flow'
 import { isDesktop } from '../model/recorder.create'
 import { useSensorDevices } from './hooks'
 
@@ -152,6 +152,33 @@ export function FlowMeterSection({ manager }: { manager: SensorManager }) {
                 <span>{fmt(status.totalL, 2, 'L')}</span>
                 <span>{fmt(status.lowPressureCmH2O, 2, 'cmH₂O')}</span>
               </div>
+              <div className="row">
+                <span className="small">On the circuit:</span>
+                {CIRCUIT_MARKERS.map((label) => {
+                  const on = status.markers.includes(label)
+                  return (
+                    <button
+                      key={label}
+                      className={`ghost${on ? ' on' : ''}`}
+                      aria-pressed={on}
+                      disabled={!connected}
+                      title={`Mark the ${label} ${on ? 'off' : 'on'}. Written to the session as a marker the TSI analysis reads.`}
+                      onClick={() => void act('marker', () => device.mark(label, !on))}
+                    >
+                      {label[0].toUpperCase() + label.slice(1)}
+                    </button>
+                  )
+                })}
+              </div>
+              {status.circuit && (
+                <p className={status.markers.includes(status.circuit.kind) ? 'muted small' : 'banner error'}>
+                  {status.circuit.kind === 'fan' ? 'Fan' : 'Dryer'} flow detected: steady{' '}
+                  {status.circuit.flowLMin.toFixed(0)} L/min
+                  {Number.isFinite(status.circuit.tempC) ? ` at ${status.circuit.tempC.toFixed(0)} °C` : ''}, not
+                  breathing. Left out of the breath tiles
+                  {status.markers.includes(status.circuit.kind) ? '.' : `; not marked, so mark it if it is the ${status.circuit.kind}.`}
+                </p>
+              )}
               {status.humiditySaturated && (
                 <p className="banner error">
                   Humidity reads 100 %: water is condensing in the tubing or on the sensor. RH and the water

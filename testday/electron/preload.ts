@@ -47,6 +47,7 @@ const bridge: TestdayBridge = {
   flowZero: () => ipcRenderer.invoke(IPC.flowZero),
   flowResetTotal: () => ipcRenderer.invoke(IPC.flowResetTotal),
   flowRate: (ms) => ipcRenderer.invoke(IPC.flowRate, ms),
+  flowMarker: (label, on) => ipcRenderer.invoke(IPC.flowMarker, label, on),
   flowRead: (sessionId) => ipcRenderer.invoke(IPC.flowRead, sessionId),
   rawRead: (sessionId) => ipcRenderer.invoke(IPC.rawRead, sessionId),
   onFlowStatus: (listener) => {

@@ -90,4 +90,23 @@ describe('FlowCapture', () => {
   it('refuses a rate the meter does not offer', async () => {
     await expect(capture.connect({ host: '127.0.0.1', rateMs: 7 })).rejects.toThrow(/must be one of/)
   })
+
+  it('journals the operator\'s circuit markers, and the ones already on when a session begins', async () => {
+    await capture.connect({ host: '127.0.0.1', rateMs: 10 })
+    capture.marker('fan', true)
+    capture.marker('fan', true)
+    expect(capture.status()?.markers).toEqual(['fan'])
+    events = []
+    capture.attach(dir)
+    expect(events).toContainEqual({ kind: 'marker', data: { label: 'fan', state: 'on' } })
+    capture.marker('fan', false)
+    capture.marker('dryer', true)
+    expect(events.filter((e) => e.kind === 'marker').map((e) => e.data)).toEqual([
+      { label: 'fan', state: 'on' },
+      { label: 'fan', state: 'off' },
+      { label: 'dryer', state: 'on' },
+    ])
+    expect(capture.status()?.markers).toEqual(['dryer'])
+  })
+
 })

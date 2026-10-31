@@ -18,7 +18,7 @@ import { PendingAppends } from './pending'
 import { SessionStore, isClosed, type OpenSession } from './sessions'
 import { Library } from './library'
 import { FlowCapture } from './tsi/capture'
-import { FLOW_FILE, decodeFlow } from '../src/model/flow'
+import { CIRCUIT_MARKERS, FLOW_FILE, decodeFlow, type CircuitMarker } from '../src/model/flow'
 import { IPC, type CloseResult, type StoragePaths, type WriteStatus } from './ipc'
 import type {
   JournalEvent,
@@ -634,6 +634,10 @@ function registerHandlers(): void {
   ipcMain.handle(IPC.flowZero, () => flow.zero())
   ipcMain.handle(IPC.flowResetTotal, () => flow.resetTotal())
   ipcMain.handle(IPC.flowRate, (_event, ms: number) => flow.setRate(ms))
+  ipcMain.handle(IPC.flowMarker, (_event, label: string, on: boolean) => {
+    if (!(CIRCUIT_MARKERS as readonly string[]).includes(label)) throw new Error(`Unknown marker ${label}`)
+    return flow.marker(label as CircuitMarker, on === true)
+  })
   ipcMain.handle(IPC.flowRead, (_event, id: string) => {
     const dir = store.dirFor(id)
     const path = dir ? join(dir, FLOW_FILE) : null

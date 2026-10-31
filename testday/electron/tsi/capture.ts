@@ -1,5 +1,6 @@
 import { join } from 'node:path'
-import { FLOW_FILE, type FlowCommand, type FlowMeterStatus, type FlowRecord } from '../../src/model/flow'
+import { FLOW_FILE, type CircuitMarker, type FlowCommand, type FlowMeterStatus, type FlowRecord } from '../../src/model/flow'
+import type { CircuitFlow } from '../../src/model/circuit'
 import type { JournalEventKind } from '../../src/model/journal'
 import { JournalWriter } from '../journal'
 import { TsiMeter, type TsiMeterOptions } from './meter'
@@ -40,6 +41,9 @@ export class FlowCapture {
   private writer: JournalWriter<FlowRecord> | null = null
   private held: FlowRecord[] = []
   private statusTimer: ReturnType<typeof setInterval> | null = null
+  private readonly markers = new Set<CircuitMarker>()
+  /** The detected state last journalled. */
+  private detected: CircuitFlow | null = null
 
   constructor(deps: FlowCaptureDeps) {
     this.deps = deps
@@ -64,6 +68,19 @@ export class FlowCapture {
     if (!dir) return
     this.writer = new JournalWriter<FlowRecord>(join(dir, FLOW_FILE))
     this.recordMeter()
+    // A session that begins with the fan already running starts with it on.
+    for (const label of this.markers) this.deps.journalEvent('marker', { label, state: 'on' })
+    if (this.detected) this.deps.journalEvent('circuitDetected', { label: this.detected, state: 'on' })
+  }
+
+  /** The operator marks a condition on the circuit on or off. */
+  marker(label: CircuitMarker, on: boolean): FlowMeterStatus | null {
+    if (this.markers.has(label) === on) return this.status()
+    if (on) this.markers.add(label)
+    else this.markers.delete(label)
+    this.deps.journalEvent('marker', { label, state: on ? 'on' : 'off' })
+    this.pushNow()
+    return this.status()
   }
 
   async connect(options: FlowConnectOptions): Promise<FlowMeterStatus> {
@@ -98,7 +115,7 @@ export class FlowCapture {
       throw error
     }
     this.journalMeter()
-    return meter.status()
+    return this.withMarkers(meter.status())
   }
 
   async disconnect(): Promise<void> {
@@ -107,7 +124,8 @@ export class FlowCapture {
     this.meter = null
     await meter.stop()
     this.stopStatus()
-    this.deps.pushStatus(meter.status())
+    this.observe(null)
+    this.deps.pushStatus(this.withMarkers(meter.status()))
   }
 
   zero(): Promise<FlowCommand> {
@@ -128,7 +146,7 @@ export class FlowCapture {
   }
 
   status(): FlowMeterStatus | null {
-    return this.meter?.status() ?? null
+    return this.meter ? this.withMarkers(this.meter.status()) : null
   }
 
   /** Closes the file and the connection. For quitting. */
@@ -196,7 +214,27 @@ export class FlowCapture {
   }
 
   private pushNow(): void {
-    if (this.meter) this.deps.pushStatus(this.meter.status())
+    const status = this.status()
+    if (!status) return
+    this.observe(status.circuit?.kind ?? null, status)
+    this.deps.pushStatus(status)
+  }
+
+  private withMarkers(status: FlowMeterStatus): FlowMeterStatus {
+    return { ...status, markers: [...this.markers] }
+  }
+
+  /** Journals the detected state when it changes; fan straight to dryer is one off and one on. */
+  private observe(kind: CircuitFlow | null, status?: FlowMeterStatus): void {
+    if (kind === this.detected) return
+    const detail: Record<string, number> = {}
+    if (status?.circuit) {
+      detail.flowLMin = Number(status.circuit.flowLMin.toFixed(1))
+      if (Number.isFinite(status.circuit.tempC)) detail.tempC = Number(status.circuit.tempC.toFixed(1))
+    }
+    if (this.detected) this.deps.journalEvent('circuitDetected', { label: this.detected, state: 'off' })
+    if (kind) this.deps.journalEvent('circuitDetected', { label: kind, state: 'on', ...detail })
+    this.detected = kind
   }
 
   private stopStatus(): void {

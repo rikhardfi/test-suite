@@ -49,8 +49,9 @@ export const METRIC_INFO: Record<MetricKey, MetricInfo> = {
   heatStrainIndex: { label: 'Heat strain index', unit: '', typicalIntervalS: 2, channel: 'metric' },
   coreQuality: { label: 'CORE reading quality', unit: '', typicalIntervalS: 2, channel: 'metric' },
   coreHrmState: { label: 'CORE strap link', unit: '', typicalIntervalS: 2, channel: 'metric' },
-  ventilationLMin: { label: 'Minute ventilation', unit: 'L/min', typicalIntervalS: 1, channel: 'metric' },
-  breathingRate: { label: 'Breathing rate', unit: 'breaths/min', typicalIntervalS: 1, channel: 'metric' },
+  // Once per breath, so up to ten seconds apart at rest.
+  ventilationLMin: { label: 'Minute ventilation', unit: 'L/min', typicalIntervalS: 4, channel: 'metric' },
+  breathingRate: { label: 'Breathing rate', unit: 'breaths/min', typicalIntervalS: 4, channel: 'metric' },
   expFlowLMin: { label: 'Exhaled flow', unit: 'L/min', typicalIntervalS: 1, channel: 'metric' },
   expTempC: { label: 'Exhaled gas temperature', unit: '°C', typicalIntervalS: 1, channel: 'metric' },
   expHumidityPct: { label: 'Exhaled gas humidity', unit: '%RH', typicalIntervalS: 1, channel: 'metric' },

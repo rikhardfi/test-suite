@@ -18,7 +18,13 @@
  * `electron/tsi/timing.ts` for why rows are timed from their index.
  */
 
+import type { Exhalation } from './breaths'
+import type { CircuitState } from './circuit'
+
 export const FLOW_FILE = 'flow.ndjson'
+
+/** Seconds of rows the meter keeps to find breaths in: a 30 s window and the breath either side. */
+export const BREATH_WINDOW_S = 45
 
 /** Identity and settings, written when a session starts and whenever they change. */
 export interface FlowMeterRecord {
@@ -126,8 +132,27 @@ export interface FlowMeterStatus {
   lastGapMs: number | null
   /** Latest RH at or above 99.5 %: likely condensation, humidity no longer meaningful. */
   humiditySaturated: boolean
+  /**
+   * The exhalations in the last `BREATH_WINDOW_S` of rows, segmented the way
+   * the analysis segments them (`breaths.ts`). The whole window every time,
+   * not what is new: from `from` on, this list replaces whatever the receiver
+   * held. Null until there are rows.
+   */
+  breaths: { from: number; to: number; exhalations: Exhalation[] } | null
+  /** Fan or dryer flow inferred from the gas (`circuit.ts`), or null. */
+  circuit: CircuitState | null
+  /** Conditions the operator has marked as on the circuit now. */
+  markers: CircuitMarker[]
   error: string | null
 }
+
+/**
+ * What the operator can mark as on the circuit. Written as journal events of
+ * kind `marker`, `{label, state: "on" | "off"}`, which is exactly what
+ * `tsi_event_spans()` in the ventilation project reads from the sidecar.
+ */
+export const CIRCUIT_MARKERS = ['fan', 'dryer', 'filter'] as const
+export type CircuitMarker = (typeof CIRCUIT_MARKERS)[number]
 
 const FLOW_TYPES = new Set(['meter', 'block', 'segment', 'command'])
 

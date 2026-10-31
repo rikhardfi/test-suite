@@ -1,7 +1,8 @@
-import { ARANET_CHR, ARANET_SVC, CHR, CORE_CHR, CORE_SVC, ESS_CHR, SVC } from './uuids'
+import { ARANET_CHR, ARANET_SVC, CHR, CORE_CHR, CORE_SVC, ESS_CHR, SVC, TYMEWEAR_CHR, TYMEWEAR_SVC } from './uuids'
 import {
   RevolutionCounter,
   parseAranet,
+  VitalProBreaths,
   parseCoreTemperature,
   parseCsc,
   parseCyclingPower,
@@ -49,6 +50,11 @@ export interface SensorProfile {
    * reads as a known limitation rather than as a bug.
    */
   mayRequirePairing?: boolean
+  /**
+   * Name prefixes offered in the chooser beside the service, for a device that
+   * may not advertise its service. Case-sensitive, as Web Bluetooth matches them.
+   */
+  namePrefixes?: readonly string[]
 }
 
 export const SENSOR_PROFILES: readonly SensorProfile[] = [
@@ -99,6 +105,16 @@ export const SENSOR_PROFILES: readonly SensorProfile[] = [
     kind: 'coreTemp',
     service: CORE_SVC,
     provides: ['coreTempC', 'skinTempC', 'heatStrainIndex', 'coreQuality', 'coreHrmState', 'heartRate'],
+  },
+  {
+    key: 'tymewear',
+    label: 'Tymewear VitalPro',
+    hint: 'Breathing strap: minute ventilation and breathing rate, once per breath. Unofficial protocol.',
+    kind: 'ventilation',
+    service: TYMEWEAR_SVC,
+    provides: ['ventilationLMin', 'breathingRate'],
+    // Not "TymeHR": that is the strap's separate heart rate sensor.
+    namePrefixes: ['VitalPro', 'vitalpro', 'TYME-', 'tymewear'],
   },
   {
     key: 'aranet',
@@ -543,7 +559,10 @@ export class SensorManager {
     }
 
     const device = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [profile.service] }],
+      filters: [
+        { services: [profile.service] },
+        ...(profile.namePrefixes ?? []).map((namePrefix) => ({ namePrefix })),
+      ],
       optionalServices: [SVC.battery, SVC.deviceInformation, profile.service],
     })
 
@@ -872,6 +891,16 @@ export class SensorManager {
       case 'rsc':
         await this.notify(entry, service, CHR.rscMeasurement, parseRsc)
         break
+
+      case 'tymewear': {
+        const breaths = new VitalProBreaths()
+        if (!(await this.notify(entry, service, TYMEWEAR_CHR.data, breaths.parse))) {
+          throw new Error('This VitalPro exposes no breathing stream')
+        }
+        // Undocumented; subscribed so the trace shows what it carries.
+        await this.notify(entry, service, TYMEWEAR_CHR.breathing, () => ({}))
+        break
+      }
 
       case 'core':
         if (!(await this.notify(entry, service, CORE_CHR.measurement, parseCoreTemperature))) {

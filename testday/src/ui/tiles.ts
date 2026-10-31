@@ -5,6 +5,8 @@ import { CORE_QUALITY } from '../ble/parse'
 import type { Athlete, Protocol } from '../model/protocol'
 import type { Environment, RunnerSnapshot, Sample } from '../model/session'
 import { waterContentOf } from '../model/humidity'
+import { karamaounThresholdLMin, type AirwayLoad, type Room } from '../model/airway'
+import type { CircuitFlow } from '../model/circuit'
 import type { MetricUpdate } from '../ble/types'
 
 /**
@@ -31,6 +33,27 @@ export interface TileContext {
   rr: readonly number[]
   /** The conditions the operator last entered, when no monitor is speaking. */
   conditions?: Environment | null
+  /** The last 30 s of TSI exhalations against room air, when both are known. */
+  airway?: AirwayLoad | null
+  /** Fan or dryer flow detected on the TSI circuit, which is not breath. */
+  circuit?: CircuitFlow | null
+}
+
+/** In place of a breath figure while the circuit carries a fan or dryer. */
+const onCircuit = (c: TileContext): TileValue | null =>
+  c.circuit ? { value: '–', note: `${c.circuit} on the circuit, not breath` } : null
+
+/**
+ * The air the athlete breathes in: the monitor when it gives both temperature
+ * and humidity, otherwise what was last entered under Conditions.
+ */
+export function roomAir(context: Pick<TileContext, 'metrics' | 'conditions'>): (Room & { from: string }) | null {
+  const { ambientTempC, humidityPct } = context.metrics
+  if (ambientTempC != null && humidityPct != null) return { tempC: ambientTempC, humidityPct, from: 'monitor' }
+  const entered = context.conditions
+  if (entered?.tempC == null || entered.humidityPct == null) return null
+  const at = new Date(entered.at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return { tempC: entered.tempC, humidityPct: entered.humidityPct, from: `entered ${at}` }
 }
 
 export type TileTone = 'power' | 'heart' | 'target' | 'lactate' | 'core' | 'vo2'
@@ -59,6 +82,12 @@ export interface TileDef {
 
 const fmt = (value: number | undefined | null, decimals = 0): string | null =>
   value == null || !Number.isFinite(value) ? null : value.toFixed(decimals)
+
+/** Barometric pressure, Pa, from the monitor or the Conditions form. */
+export const pressurePa = (context: Pick<TileContext, 'metrics' | 'conditions'>): number | undefined => {
+  const hPa = context.metrics.pressureHpa ?? context.conditions?.pressureHpa
+  return hPa == null ? undefined : hPa * 100
+}
 
 const workSamples = (context: TileContext): Sample[] =>
   context.samples.filter((s) => s.stepIndex === context.snapshot.stepIndex && s.phase === 'work')
@@ -442,7 +471,12 @@ export const TILES: readonly TileDef[] = [
     compute: (c) =>
       c.metrics.expFlowLMin == null
         ? null
-        : { value: c.metrics.expFlowLMin.toFixed(1), unit: 'L/min', note: 'Std, dry gas' },
+        : {
+            value: c.metrics.expFlowLMin.toFixed(1),
+            unit: 'L/min',
+            note: c.circuit ? `${c.circuit} flow, not breath` : 'Std, dry gas',
+            suspect: c.circuit != null,
+          },
   },
   {
     key: 'expGas',
@@ -471,6 +505,64 @@ export const TILES: readonly TileDef[] = [
       "The flow meter's running volume since it was last reset (Sensors → TSI flow meter → Reset volume), Std L.",
     compute: (c) =>
       c.metrics.expTotalL == null ? null : { value: c.metrics.expTotalL.toFixed(1), unit: 'L', note: 'since reset' },
+  },
+  {
+    key: 'energyLost',
+    label: 'Energy lost',
+    tone: 'vo2',
+    about:
+      'Heat and water the exhaled air carries away beyond the room air breathed in, per hour, over the last 30 s of exhalations through the TSI meter: sensible plus latent heat, the same arithmetic as the ventilation project\'s breath analysis. Measured at the meter, downstream of mask and tubing, with a humidity sensor that lags the breath, so it is a lower bound on the loss at the mouth. Needs room temperature and humidity.',
+    compute: (c) => {
+      const a = c.airway
+      if (!a) return onCircuit(c)
+      return {
+        value: a.lostKjH.toFixed(0),
+        unit: 'kJ/h',
+        note: `water ${a.waterLostGH.toFixed(0)} g/h · 30 s · at the meter`,
+        suspect: a.saturatedShare > 0.5,
+      }
+    },
+  },
+  {
+    key: 'energyRecovered',
+    label: 'Airway recovered',
+    tone: 'vo2',
+    about:
+      'Heat and water handed back to the airway wall on the way out, per hour over the last 30 s: what bringing the inhaled room air to 37 °C and saturation costs, minus what the exhaled air still carries at the meter. Measured, not modelled. The meter lags and sits downstream of the mouth, so this overstates recovery by an amount nobody has measured; the share of demand is the figure to compare between sessions in the same set-up, not with the Haut model. Needs room temperature and humidity.',
+    compute: (c) => {
+      const a = c.airway
+      if (!a) return onCircuit(c)
+      return {
+        value: a.recoveredKjH.toFixed(0),
+        unit: 'kJ/h',
+        note: `${a.recoveredPct.toFixed(0)}% of demand · 30 s · at the meter`,
+        suspect: a.saturatedShare > 0.5,
+      }
+    },
+  },
+  {
+    key: 'karamaoun',
+    label: 'Karamaoun',
+    tone: 'vo2',
+    about:
+      'Minute ventilation as a share of the Karamaoun threshold: the VE above which the tracheal surface liquid is modelled to dry (85 L/min at 19 °C and 55 %, Karamaoun et al. 2022), moved to the room\'s air by its water flux, as the ventilation project does. VE is the last 30 s of TSI exhalations at BTPS, or the ventilation wearable when the TSI is not in use. The second line gives the threshold and the minutes above it since the test started, counted from the TSI only. The threshold comes from a model resting on a small literature, not from a measurement in this athlete.',
+    compute: (c) => {
+      const room = roomAir(c)
+      if (!room) return null
+      const a = c.airway
+      const threshold = a?.karamaoun.thresholdLMin ?? karamaounThresholdLMin(room.tempC, room.humidityPct, pressurePa(c))
+      const ve = a?.veLMin ?? c.metrics.ventilationLMin
+      const minutes = a?.karamaoun.minutesAbove
+      const parts = [Number.isFinite(threshold) ? `of ${threshold.toFixed(0)} L/min` : 'unreachable in this air']
+      if (minutes != null) parts.push(`${minutes.toFixed(1)} min above`)
+      if (ve == null) return { value: Number.isFinite(threshold) ? threshold.toFixed(0) : '–', unit: 'L/min', note: 'threshold · no VE' }
+      if (!a) parts.push('wearable')
+      return {
+        value: Number.isFinite(threshold) ? ((100 * ve) / threshold).toFixed(0) : '0',
+        unit: '%',
+        note: parts.join(' · '),
+      }
+    },
   },
 
   // --- the body -------------------------------------------------------------
@@ -509,18 +601,13 @@ export const TILES: readonly TileDef[] = [
     about:
       'Water in each litre of room air, from temperature and humidity together, since neither says it alone: 50% is about 10 mg/L at 23 °C and about 1 mg/L at −10 °C. Per litre of the air as it is, not BTPS. The same arithmetic as the ventilation project, so the two agree. From the monitor when one is connected, otherwise from what was last entered under Conditions.',
     compute: (c) => {
-      const live = { tempC: c.metrics.ambientTempC, humidityPct: c.metrics.humidityPct }
-      const reading = waterContentOf(live) != null ? live : c.conditions
-      const water = reading ? waterContentOf(reading) : null
-      if (!reading || water == null) return null
-      const from =
-        reading === live
-          ? 'monitor'
-          : `entered ${new Date((reading as Environment).at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+      const room = roomAir(c)
+      const water = room ? waterContentOf(room) : null
+      if (!room || water == null) return null
       return {
         value: water.toFixed(1),
         unit: 'mg/L',
-        note: `${reading.tempC?.toFixed(1)} °C · ${reading.humidityPct?.toFixed(0)}% · ${from}`,
+        note: `${room.tempC.toFixed(1)} °C · ${room.humidityPct.toFixed(0)}% · ${room.from}`,
       }
     },
   },

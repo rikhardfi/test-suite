@@ -10,6 +10,9 @@ import type {
   FlowSegment,
   SegmentStart,
 } from '../../src/model/flow'
+import { BREATH_WINDOW_S } from '../../src/model/flow'
+import { exhalations, type FlowRows } from '../../src/model/breaths'
+import { detectCircuit, type CircuitState } from '../../src/model/circuit'
 import { LineSplitter, SEGMENT_MS, TSI_PORT, cmd, meterCandidates, parseLine, type TsiRow } from './protocol'
 import { SegmentClock, gapSamples, gapVolumeL, preciseNow } from './timing'
 
@@ -102,6 +105,9 @@ export class TsiMeter {
   private latest: TsiRow | null = null
   private flowSum = 0
   private flowCount = 0
+  /** The last `BREATH_WINDOW_S` of rows on one grid, missing rows as NaN, for the breaths in the status. */
+  private circuit: CircuitState | null = null
+  private recent = { lastAt: null as number | null, f: [] as number[], tc: [] as number[], rh: [] as number[], p: [] as number[] }
 
   constructor(options: TsiMeterOptions) {
     this.opts = {
@@ -191,6 +197,8 @@ export class TsiMeter {
       gaps: this.gaps,
       lastGapMs: this.lastGapMs,
       humiditySaturated: (row?.humidityPct ?? 0) >= 99.5,
+      ...this.fromRecent(),
+      markers: [],
       error: this.error,
     }
   }
@@ -530,6 +538,7 @@ export class TsiMeter {
     this.rows += 1
     this.flowSum += row.flow
     this.flowCount += 1
+    this.keepRecent(row, s.clock.timeOf(i))
 
     const perSegment = Math.round(this.opts.segmentMs / this.opts.rateMs)
     const ahead = Math.max(1, Math.round(QUEUE_AHEAD_MS / this.opts.rateMs))
@@ -537,6 +546,50 @@ export class TsiMeter {
       s.queued = true
       this.send(cmd.stream)
     }
+  }
+
+  private keepRecent(row: TsiRow, at: number): void {
+    const r = this.recent
+    const dt = this.opts.rateMs
+    const max = Math.round((BREATH_WINDOW_S * 1000) / dt)
+    // A stream restart or a reconnect leaves rows missing. They are kept as
+    // missing, so a breath is not stitched together across them.
+    const missing = r.lastAt == null ? 0 : Math.min(max, Math.round((at - r.lastAt) / dt) - 1)
+    for (let k = 0; k < missing; k++) {
+      r.f.push(NaN)
+      r.tc.push(NaN)
+      r.rh.push(NaN)
+      r.p.push(NaN)
+    }
+    r.f.push(row.flow)
+    r.tc.push(row.tempC)
+    r.rh.push(row.humidityPct)
+    r.p.push(row.pressureKpa)
+    r.lastAt = at
+    if (r.f.length > 2 * max) {
+      const drop = r.f.length - max
+      for (const channel of [r.f, r.tc, r.rh, r.p]) channel.splice(0, drop)
+    }
+  }
+
+  /** Breaths and circuit state from the recent rows. The circuit state holds between calls. */
+  private fromRecent(): Pick<FlowMeterStatus, 'breaths' | 'circuit'> {
+    const r = this.recent
+    if (r.lastAt == null || r.f.length === 0) return { breaths: null, circuit: null }
+    const dt = this.opts.rateMs
+    const max = Math.round((BREATH_WINDOW_S * 1000) / dt)
+    const from = Math.max(0, r.f.length - max)
+    const t0 = r.lastAt - (r.f.length - 1 - from) * dt
+    const rows: FlowRows = {
+      flow: r.f.slice(from),
+      tempC: r.tc.slice(from),
+      rhPct: r.rh.slice(from),
+      pressureKpa: r.p.slice(from),
+      dtS: dt / 1000,
+      t0,
+    }
+    this.circuit = detectCircuit(rows, this.circuit?.kind ?? null)
+    return { breaths: { from: t0, to: r.lastAt, exhalations: exhalations(rows) }, circuit: this.circuit }
   }
 
   private flush(): void {

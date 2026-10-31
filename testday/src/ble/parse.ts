@@ -406,3 +406,44 @@ export function parseAranet(view: DataView): MetricUpdate {
 
   return out
 }
+
+/**
+ * Tymewear VitalPro breath packets (`TYMEWEAR_CHR.data`), one per breath.
+ *
+ * Type 0x01, 17 bytes, little-endian: [0] type, [1..4] uint32 timestamp in
+ * 40 ms ticks, [5..6] inhale time, [7..8] exhale time (both in 10 ms units),
+ * [9..10] tidal volume as a raw strap reading. Types 0x02 (IMU) and 0x06 (raw
+ * peaks) say nothing here and decode to nothing.
+ *
+ * Breathing rate is 60 s over the time since the previous breath packet, which
+ * includes the pause between breaths, and falls back to inhale plus exhale for
+ * the first breath or after a gap too long to be one breath (rate under 4).
+ * Minute ventilation is rate times raw volume times 0.01. That factor is not a
+ * physical calibration: the community projects fitted it so their VE matches
+ * the Tymewear app's own to within 0.2 % over about ten thousand records. So
+ * this is Tymewear's estimate of VE, not a measurement of volume, which is
+ * exactly why it is worth setting against the TSI.
+ *
+ * Stateful (the previous timestamp), so one per connection.
+ */
+export class VitalProBreaths {
+  private previousTicks: number | null = null
+
+  parse = (view: DataView): MetricUpdate => {
+    if (view.byteLength < 17 || view.getUint8(0) !== 0x01) return {}
+    const ticks = view.getUint32(1, true)
+    const inhale = view.getUint16(5, true)
+    const exhale = view.getUint16(7, true)
+    const rawVolume = view.getUint16(9, true)
+    if (inhale + exhale === 0) return {}
+
+    const previous = this.previousTicks
+    this.previousTicks = ticks
+    const fromTicks = previous != null && ticks > previous ? 60 / ((ticks - previous) * 0.04) : null
+    const breathingRate = fromTicks != null && fromTicks >= 4 ? fromTicks : 6000 / (inhale + exhale)
+    const ventilationLMin = breathingRate * rawVolume * 0.01
+
+    if (breathingRate > 120 || ventilationLMin > 250) return {}
+    return { breathingRate, ventilationLMin }
+  }
+}

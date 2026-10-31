@@ -8,7 +8,7 @@ import type {
 } from '../src/model/journal'
 import type { LactateEntry, Sample, SessionRecord } from '../src/model/session'
 import type { Protocol } from '../src/model/protocol'
-import type { FlowCommand, FlowMeterStatus, FlowRecord } from '../src/model/flow'
+import type { CircuitMarker, FlowCommand, FlowMeterStatus, FlowRecord } from '../src/model/flow'
 
 /**
  * The contract between the recording process and the interface. Both sides
@@ -45,6 +45,7 @@ export const IPC = {
   flowZero: 'testday:flow-zero',
   flowResetTotal: 'testday:flow-reset-total',
   flowRate: 'testday:flow-rate',
+  flowMarker: 'testday:flow-marker',
   flowRead: 'testday:flow-read',
   rawRead: 'testday:raw-read',
   // Pushed from the recorder to the interface.
@@ -164,6 +165,8 @@ export interface TestdayBridge {
   flowZero(): Promise<FlowCommand>
   flowResetTotal(): Promise<FlowCommand>
   flowRate(ms: number): Promise<FlowCommand>
+  /** Marks a condition on the circuit on or off; journalled when a session is open. */
+  flowMarker(label: CircuitMarker, on: boolean): Promise<FlowMeterStatus | null>
   onFlowStatus(listener: (status: FlowMeterStatus) => void): () => void
   /** A session's flow meter recording, or null when it has none. For export. */
   flowRead(sessionId: string): Promise<FlowRecord[] | null>

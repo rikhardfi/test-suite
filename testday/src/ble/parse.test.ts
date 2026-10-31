@@ -11,6 +11,7 @@ import {
   parseIndoorBikeData,
   parseRsc,
   parseTreadmillData,
+  VitalProBreaths,
 } from './parse'
 
 const view = (...bytes: number[]) => new DataView(new Uint8Array(bytes).buffer)
@@ -247,5 +248,47 @@ describe('the standard environmental sensor', () => {
     expect(parseEssHumidity(view(...le16(0xffff)))).toEqual({})
     expect(parseEssPressure(view(...le32(0xffffffff)))).toEqual({})
     expect(parseEssPressure(view(0x01))).toEqual({})
+  })
+})
+
+describe('Tymewear VitalPro breaths', () => {
+  /** A type 0x01 breath packet as the strap sends it. */
+  const breath = (ticks: number, inhale: number, exhale: number, rawVolume: number, type = 0x01) => {
+    const view = new DataView(new ArrayBuffer(17))
+    view.setUint8(0, type)
+    view.setUint32(1, ticks, true)
+    view.setUint16(5, inhale, true)
+    view.setUint16(7, exhale, true)
+    view.setUint16(9, rawVolume, true)
+    view.setUint16(11, rawVolume, true)
+    return view
+  }
+
+  it('takes the first breath rate from inhale plus exhale, then from the time between breaths', () => {
+    const p = new VitalProBreaths()
+    // 1.2 s in, 1.8 s out: 20 /min. Raw volume 150: 1.5 L, 30 L/min.
+    const first = p.parse(breath(1000, 120, 180, 150))
+    expect(first.breathingRate).toBeCloseTo(20, 6)
+    expect(first.ventilationLMin).toBeCloseTo(30, 6)
+    // 100 ticks later is 4 s: 15 /min, pause included.
+    const second = p.parse(breath(1100, 120, 180, 200))
+    expect(second.breathingRate).toBeCloseTo(15, 6)
+    expect(second.ventilationLMin).toBeCloseTo(30, 6)
+  })
+
+  it('falls back to the breath itself across a dropped packet', () => {
+    const p = new VitalProBreaths()
+    p.parse(breath(0, 100, 100, 100))
+    // 20 s later would be 3 /min, too slow to be one breath.
+    expect(p.parse(breath(500, 100, 200, 100)).breathingRate).toBeCloseTo(20, 6)
+  })
+
+  it('says nothing for IMU and peak packets, short packets, or the implausible', () => {
+    const p = new VitalProBreaths()
+    expect(p.parse(breath(0, 100, 100, 100, 0x02))).toEqual({})
+    expect(p.parse(breath(0, 100, 100, 100, 0x06))).toEqual({})
+    expect(p.parse(new DataView(new ArrayBuffer(13)))).toEqual({})
+    expect(p.parse(breath(0, 0, 0, 100))).toEqual({})
+    expect(p.parse(breath(10, 100, 100, 60000))).toEqual({})
   })
 })

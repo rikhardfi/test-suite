@@ -76,6 +76,18 @@ anything that follows the spec works.
 | Fitness Machine (FTMS) | `0x1826` | Indoor bike and treadmill data, **plus ERG and pace control** |
 | Battery | `0x180F` | Battery level |
 
+**Tymewear VitalPro (unofficial).** The breathing strap has its own service
+(`40b50000-30b5-11e5-a151-feff819cdc90`). Tymewear does not publish its protocol. The UUIDs and packet
+layout come from two MIT-licensed community projects, k-breathe and Tyme4All
+(github.com/gloscherrybomb), and are reimplemented in `VitalProBreaths` (`src/ble/parse.ts`). The strap
+sends one packet per breath. Breathing rate is taken from the time between breaths, and minute ventilation
+is rate × raw volume × 0.01. That factor reproduces the Tymewear app's own VE, so the result is Tymewear's
+estimate rather than a measured volume, and setting it against the TSI is the point of recording it.
+The heart rate side of the strap ("TymeHR") is an ordinary heart rate sensor. The chooser also lists
+devices by name (VitalPro, TYME-) in case the service is not advertised. None of this has been
+confirmed on our own strap yet. Connect it and check the values against the Tymewear app before relying
+on them. *Save trace* in the sensor panel keeps the raw packets.
+
 FTMS control point commands used: request control, set target power (ERG), set target speed, set
 target inclination, start, stop. Commands are serialised one at a time and matched against their
 indication, because trainers drop overlapping writes.
@@ -185,6 +197,46 @@ already does this.
 **Analysis** lives in the ventilation project (`ventilation_code`, Data > TSI breaths, `R/tsi.R`):
 import a research export there for breath detection, per-breath energy and water, and the check of
 whether the sensors reached room air.
+
+**Live airway tiles.** Three tiles in the picker, available once the TSI is connected and room
+temperature and humidity are known (from the monitor or under Conditions):
+
+- *Energy lost*: kJ/h, sensible plus latent, that the exhaled air carries beyond the room air breathed in, with water in g/h.
+- *Airway recovered*: kJ/h. This is what bringing that room air to 37 °C and saturation costs, minus what is still in the exhaled air; the second line gives it as a share of that demand.
+- *Karamaoun*: VE as a percentage of the threshold above which the tracheal surface liquid is modelled to dry (85 L/min at 19 °C and 55 %, Karamaoun et al. 2022, moved to the room's air by its water flux). The second line gives the threshold and the minutes above it since the test started. VE is TSI at BTPS; the ventilation wearable stands in when the TSI is not in use, but time above is counted from the TSI only.
+
+All three use the last 30 s of exhalations. They stay blank until the meter has 30 s of breaths, and
+for as long as nobody has breathed into it for 10 s. The exhalations are found live in the recording
+process (`src/model/breaths.ts`), using the same gates and the same 50 to 90 % plateau as `tsi_segments()`
+and `tsi_breath_energy()`. The physics in `src/model/airway.ts` matches `R/tsi.R`,
+`R/dehydration.R` and `R/altitude.R`, and `airway.test.ts` pins values computed by that R code.
+Latent heat is `2501 − 2.361·T` kJ/kg on both sides of the balance, as in `R/tsi.R`, not the season
+pipeline's 2260. These are measurements at the meter, downstream of mask and tubing, with a lagging
+humidity sensor. So loss is a lower bound and recovery an upper bound on what happens at the mouth.
+Compare them between sessions in the same set-up, not with the Haut model.
+
+**Fan and dryer on the circuit.** Flow that stays above 1 L/min for 10 s is not breathing: no
+exhalation lasts that long, and the analysis already treats anything over 8 s or 8 L as fan or dryer
+flow. Such "exhalations" are dropped here too. A steady flow is read as the **dryer** at 25 L/min or
+more, or with the gas at 40 °C or more, and otherwise as the **fan**. On the 2026-09-30 recording the
+fan ran at 6 to 13 L/min near room temperature and the dryer at 29 to 50 L/min at 23 to 62 °C. Over
+that whole session the detector found every fan and dryer run and nothing during breathing. Once on,
+the state holds through dips and stream restarts until the flow has actually stopped, or until the
+flow swings like breathing: 30 L/min or more between the 5th and 95th percentile of the window, rising
+through that swing at least twice. The fan and the dryer are steady; breathing is not, whatever the
+sign of the flow. On 2026-10-02 high-ventilation bouts between fan runs kept exhalation on for over
+half of each breath and showed inspiration as positive humps of 20 to 40 L/min, so every window was
+over 95 % positive and the old hold never let go: the panel showed the fan for minutes of breathing.
+With the swing rule the detector is off in every bout of that session and on in every fan run
+between them. The panel
+shows it, the breath tiles say why they are blank, and the session journal gets a `circuitDetected`
+event (`{label, state}`) at each change.
+
+The operator says what is really there with **Fan**, **Dryer** and **Filter** in the TSI panel.
+Each press writes a `marker` event, `{label, state: "on" | "off"}`, which is what `tsi_event_spans()`
+reads from the sidecar. Markers still on when a session begins are written at its start. Detection
+and markers are separate event kinds on purpose: the analysis must never take an inference for an
+observation. The panel warns when it detects something the operator has not marked.
 
 **Exports.** *Research export* writes one pseudonymised CSV on a **uniform time grid at the rate of
 the fastest device** in the session (100 Hz with the TSI at 10 ms; 1 Hz when nothing is faster),

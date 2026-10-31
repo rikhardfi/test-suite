@@ -109,3 +109,23 @@ export const ARANET_CHR = {
   /** Seconds since the last measurement. */
   sinceMeasurement: 'f0cd2004-95da-4f4b-9ac8-aa55d312af0c',
 } as const
+
+/**
+ * Tymewear VitalPro breathing strap.
+ *
+ * Tymewear publishes no protocol. Everything here comes from two MIT-licensed
+ * community projects that read the strap live, k-breathe (Karoo) and Tyme4All
+ * (Android), by gloscherrybomb, which took the UUIDs from the Tymewear app and
+ * the packet layout from captures of a real strap. Reimplemented here, not
+ * copied. The strap needs no command to start: subscribing is enough.
+ *
+ * Despite its name in the Tymewear app, `data` carries the breathing stream;
+ * `breathing` is subscribed only so that whatever it sends lands in the trace.
+ */
+export const TYMEWEAR_SVC = '40b50000-30b5-11e5-a151-feff819cdc90'
+
+export const TYMEWEAR_CHR = {
+  breathing: '40b50001-30b5-11e5-a151-feff819cdc90',
+  data: '40b50004-30b5-11e5-a151-feff819cdc90',
+  sensorId: '40b50007-30b5-11e5-a151-feff819cdc90',
+} as const

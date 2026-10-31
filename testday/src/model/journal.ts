@@ -85,6 +85,14 @@ export type JournalEventKind =
   | 'flowZero'
   | 'flowTotalizerReset'
   | 'flowRate'
+  /**
+   * What is on the breathing circuit. `marker` is the operator's word for it,
+   * `{label, state}` as `tsi_event_spans()` reads it; `circuitDetected` is the
+   * app's inference from the gas, kept apart so the analysis never takes one
+   * for the other.
+   */
+  | 'marker'
+  | 'circuitDetected'
 
 export interface JournalEvent {
   type: 'event'

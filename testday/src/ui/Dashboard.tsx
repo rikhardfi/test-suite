@@ -7,7 +7,7 @@ import { LapTable } from './LapTable'
 import { COLORS } from './theme'
 import { openAthleteWindow, useAthleteFeed } from './athleteLink'
 import { useFullscreen, useHotkeys, useLiveMetrics, useRunnerSnapshot } from './hooks'
-import { defaultFrontFor, tileByKey, tilesForSport, type TileContext, type TileTone } from './tiles'
+import { defaultFrontFor, pressurePa, roomAir, tileByKey, tilesForSport, type TileContext, type TileTone } from './tiles'
 import { formatClock, formatCountdown, mmpCurve } from '../model/metrics'
 import { criticalPower } from '../model/analysis'
 import { planPowerSeries, stepLabel, type Athlete, type Protocol } from '../model/protocol'
@@ -18,6 +18,8 @@ import { agreementFromSamples, type PowerAgreement } from '../model/powermatch'
 import { explainControlError } from '../ble/ftms'
 import type { RecorderStatus } from '../model/recorder'
 import type { SensorManager } from '../ble/manager'
+import { FLOW_METER_ID, type FlowMeterDevice } from '../ble/flowMeter'
+import { airwayLoad } from '../model/airway'
 import { Modal } from './Modal'
 
 /** Where the two dashboard dividers sit, as a percentage of the grid. */
@@ -251,6 +253,21 @@ export function Dashboard({
   // The last two minutes of beat intervals, for the HRV tile.
   const rr = useMemo(() => manager.recentRr(120), [samples.length, manager])
 
+  // The TSI's breaths against the room air. Recomputed on every metric tick,
+  // which the meter's own status drives four times a second.
+  const flowMeter = manager.devices.find((d) => d.id === FLOW_METER_ID) as FlowMeterDevice | undefined
+  const room = roomAir({ metrics, conditions })
+  const breathsTo = flowMeter?.status?.breaths?.to
+  const airway =
+    flowMeter && room && breathsTo != null
+      ? airwayLoad(flowMeter.exhalations, {
+          now: breathsTo,
+          room,
+          pressurePa: pressurePa({ metrics, conditions }),
+          since: snapshot.startedAt,
+        })
+      : null
+
   const tileContext: TileContext = {
     metrics,
     snapshot,
@@ -260,6 +277,8 @@ export function Dashboard({
     cp,
     rr,
     conditions,
+    airway,
+    circuit: flowMeter?.status?.circuit?.kind ?? null,
   }
 
   /**
@@ -298,7 +317,7 @@ export function Dashboard({
     [frontTiles, protocol.sport],
   )
   useAthleteFeed(
-    { protocol, athlete, snapshot, metrics, tiles: shownTiles, fitY, cp, rr, conditions },
+    { protocol, athlete, snapshot, metrics, tiles: shownTiles, fitY, cp, rr, conditions, airway, circuit: tileContext.circuit },
     samples,
   )
 

@@ -200,6 +200,8 @@ export interface Lap {
 
 export interface RunnerSnapshot {
   state: RunnerState
+  /** Wall clock when the test started, ms; absent before it has. */
+  startedAt?: number
   elapsedS: number
   stepIndex: number
   phase: Phase
@@ -897,6 +899,7 @@ export class TestRunner {
 
     this.cachedSnapshot = {
       state: this.state,
+      startedAt: this.startedAt || undefined,
       elapsedS: this.elapsedS,
       stepIndex: this.stepIndex,
       phase,

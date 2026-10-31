@@ -126,8 +126,14 @@ function downloadBlob(filename: string, blob: Blob): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+/**
+ * Named by the local start time, the clock the operator's notes and the
+ * session folders use. It was UTC, so a 10:58 ride exported as 08-58.
+ */
 export function sessionFilename(session: SessionRecord, extension: string): string {
-  const date = new Date(session.startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-')
+  const d = new Date(session.startedAt)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}-${pad(d.getMinutes())}`
   const slug = session.protocolName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')

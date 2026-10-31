@@ -59,6 +59,8 @@ export interface Protocol {
 }
 
 export interface Athlete {
+  /** Profile id; set when the athlete is first saved as a profile. */
+  id?: string
   name: string
   massKg: number
   ftpWatts: number

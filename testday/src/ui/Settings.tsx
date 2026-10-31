@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { Settings as SettingsShape } from '../model/storage'
+import { addAthlete, removeAthlete, switchAthlete, withProfiles, type Settings as SettingsShape } from '../model/storage'
+import { DEFAULT_ATHLETE } from '../model/protocol'
 import type { Athlete } from '../model/protocol'
 import { frcOf, hrVeFromAthleteYaml, lungsFromMedikro } from '../model/lungProfile'
 import type { StoragePaths } from '../../electron/ipc'
@@ -27,6 +28,7 @@ export function Settings({ settings, onChange, onResetAthlete }: Props) {
 
       <section className="panel pad">
         <h2>Athlete</h2>
+        <AthleteProfiles settings={settings} onChange={onChange} />
         <p className="muted small">
           FTP resolves every %-based protocol target, and mass drives the W/kg figures in analysis.
         </p>
@@ -307,5 +309,49 @@ function AirwayImports({ athlete, setAthlete }: { athlete: Athlete; setAthlete: 
       )}
       {error && <div className="banner error">{error}</div>}
     </>
+  )
+}
+
+/**
+ * Saved athlete profiles. Everything below this row edits the open one; the
+ * app reopens on whichever was open last.
+ */
+function AthleteProfiles({ settings, onChange }: { settings: SettingsShape; onChange: (s: SettingsShape) => void }) {
+  const synced = withProfiles(settings)
+  const profiles = synced.athletes ?? []
+  const open = synced.athlete.id
+  return (
+    <div className="field-grid" style={{ marginBottom: 12 }}>
+      <label>
+        Profile
+        <select value={open} onChange={(e) => onChange(switchAthlete(settings, e.target.value))}>
+          {profiles.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name || 'Unnamed'}
+              {a.lungs ? ' · spirometry' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'end' }}>
+        <button className="ghost small" onClick={() => onChange(addAthlete(settings, { ...DEFAULT_ATHLETE, name: 'New athlete' }))}>
+          New athlete
+        </button>
+        <button
+          className="ghost small"
+          onClick={() => onChange(addAthlete(settings, { ...synced.athlete, name: `${synced.athlete.name} (copy)` }))}
+        >
+          Duplicate
+        </button>
+        <button
+          className="ghost small"
+          disabled={profiles.length < 2}
+          title={profiles.length < 2 ? 'The last profile cannot be deleted' : 'Delete this profile; recordings are kept'}
+          onClick={() => open && onChange(removeAthlete(settings, open))}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
   )
 }

@@ -130,7 +130,14 @@ export async function importLegacyProtocols(): Promise<number> {
 }
 
 export interface Settings {
+  /** The athlete the app is working with now: the open profile. */
   athlete: Athlete
+  /**
+   * Every saved athlete profile, the open one included. `athlete` is the
+   * working copy and is written back here by `withProfiles()` on every save,
+   * so the app reopens with the last athlete and a switch loses nothing.
+   */
+  athletes?: Athlete[]
   wheelCircumferenceM: number
   lastProtocolId?: string
   /**
@@ -231,7 +238,8 @@ export async function loadStoredSettings(): Promise<Partial<Settings> | null> {
 export const applySettings = (current: Settings, stored: Partial<Settings>): Settings =>
   merge(current, stored)
 
-export function saveSettings(settings: Settings): void {
+export function saveSettings(input: Settings): void {
+  const settings = withProfiles(input)
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
   } catch {
@@ -240,4 +248,48 @@ export function saveSettings(settings: Settings): void {
   // Fire and forget: nothing in the interface waits on it, and a failure to
   // write preferences must never be allowed to interrupt a test.
   void desktop()?.savePreferences(settings as unknown as Record<string, unknown>)
+}
+
+// --- athlete profiles ------------------------------------------------------------
+
+const newId = (): string => {
+  const bytes = new Uint8Array(6)
+  crypto.getRandomValues(bytes)
+  return 'ath_' + [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * The settings with the open athlete given an id and written back into the
+ * profile list. Idempotent; run before every save and before showing the list.
+ */
+export function withProfiles(settings: Settings): Settings {
+  const athlete = settings.athlete.id ? settings.athlete : { ...settings.athlete, id: newId() }
+  const list = settings.athletes ?? []
+  const athletes = list.some((a) => a.id === athlete.id)
+    ? list.map((a) => (a.id === athlete.id ? athlete : a))
+    : [...list, athlete]
+  return { ...settings, athlete, athletes }
+}
+
+/** Open another saved profile; the current one is kept as it stands. */
+export function switchAthlete(settings: Settings, id: string): Settings {
+  const synced = withProfiles(settings)
+  const next = synced.athletes!.find((a) => a.id === id)
+  return next ? { ...synced, athlete: next } : synced
+}
+
+/** Save the current profile and open a new one built from `template`. */
+export function addAthlete(settings: Settings, template: Athlete): Settings {
+  const synced = withProfiles(settings)
+  const athlete = { ...template, id: newId() }
+  return { ...synced, athlete, athletes: [...synced.athletes!, athlete] }
+}
+
+/** Delete a profile. The last one cannot go; deleting the open one opens the first left. */
+export function removeAthlete(settings: Settings, id: string): Settings {
+  const synced = withProfiles(settings)
+  const athletes = synced.athletes!.filter((a) => a.id !== id)
+  if (athletes.length === 0) return synced
+  const athlete = synced.athlete.id === id ? athletes[0] : synced.athlete
+  return { ...synced, athlete, athletes }
 }

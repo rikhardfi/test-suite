@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Settings as SettingsShape } from '../model/storage'
 import type { Athlete } from '../model/protocol'
+import { frcOf, hrVeFromAthleteYaml, lungsFromMedikro } from '../model/lungProfile'
 import type { StoragePaths } from '../../electron/ipc'
 
 interface Props {
@@ -76,6 +77,7 @@ export function Settings({ settings, onChange, onResetAthlete }: Props) {
             />
           </label>
         </div>
+        <AirwayImports athlete={settings.athlete} setAthlete={setAthlete} />
       </section>
 
       <section className="panel pad">
@@ -229,5 +231,81 @@ function StorageSettings() {
         </button>
       </div>
     </section>
+  )
+}
+
+/**
+ * The two files the airway curve needs: a Medikro spirometry export (height,
+ * sex and age, for the GLI 2021 FRC) and the ventilation project's athlete
+ * config (the newest HR–VE curve). Only those fields are kept; names and IDs
+ * in the export are never stored.
+ */
+function AirwayImports({ athlete, setAthlete }: { athlete: Athlete; setAthlete: (patch: Partial<Athlete>) => void }) {
+  const [error, setError] = useState<string | null>(null)
+  const read = (file: File, encoding: string) => file.arrayBuffer().then((b) => new TextDecoder(encoding).decode(b))
+  const importXml = async (file?: File) => {
+    if (!file) return
+    try {
+      setAthlete({ lungs: lungsFromMedikro(await read(file, 'iso-8859-1')) })
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  const importYaml = async (file?: File) => {
+    if (!file) return
+    try {
+      setAthlete({ hrVeCurve: hrVeFromAthleteYaml(await read(file, 'utf-8')) })
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  const frc = frcOf(athlete.lungs)
+  const l = athlete.lungs
+  return (
+    <>
+      <h3>Airway model</h3>
+      <p className="muted small">
+        For the athlete&apos;s own Karamaoun curve (dashboard, top right, Airway). FRC is predicted with GLI 2021 from the
+        spirometry&apos;s height, sex and age unless a measured FRC is entered.
+      </p>
+      <div className="field-grid">
+        <label>
+          Spirometry (Medikro XML)
+          <input type="file" accept=".xml" onChange={(e) => void importXml(e.target.files?.[0])} />
+          <span className="muted small">
+            {l
+              ? `${l.heightCm} cm, ${l.sex === 1 ? 'male' : 'female'}, FVC ${l.fvcL?.toFixed(2) ?? '–'} L, FEV₁ ${l.fev1L?.toFixed(2) ?? '–'} L (${l.spirometryDate ?? 'undated'}) · FRC ${frc ? `${frc.frcL.toFixed(2)} L, ${frc.source}` : '–'}`
+              : 'None imported'}
+          </span>
+        </label>
+        <label>
+          Measured FRC (L), optional
+          <input
+            type="number"
+            step={0.01}
+            disabled={!l}
+            value={l?.measuredFrcL ?? ''}
+            onChange={(e) => l && setAthlete({ lungs: { ...l, measuredFrcL: Number(e.target.value) || undefined } })}
+          />
+        </label>
+        <label>
+          HR–VE curve (athlete .yml)
+          <input type="file" accept=".yml,.yaml" onChange={(e) => void importYaml(e.target.files?.[0])} />
+          <span className="muted small">
+            {athlete.hrVeCurve
+              ? `${athlete.hrVeCurve.label}, ${athlete.hrVeCurve.points.length} points`
+              : 'None imported'}
+          </span>
+        </label>
+      </div>
+      {(l || athlete.hrVeCurve) && (
+        <button className="ghost small" onClick={() => setAthlete({ lungs: undefined, hrVeCurve: undefined })}>
+          Clear airway imports
+        </button>
+      )}
+      {error && <div className="banner error">{error}</div>}
+    </>
   )
 }

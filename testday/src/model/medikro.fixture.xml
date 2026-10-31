@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE SpiroXML2 [<!ELEMENT SpiroXML2 (E)*><!ELEMENT E (E)*><!ATTLIST E T CDATA #REQUIRED N CDATA #IMPLIED V CDATA #IMPLIED >]>
+<SpiroXML2>
+    <E T="D">
+        <E T="T" N="Person">
+            <E T="R">
+                <E T="C" N="PersonKey" V="1"/>
+                <E T="C" N="PersonalID" V="010180-123A"/>
+                <E T="C" N="LastName" V="Doe"/>
+                <E T="C" N="FirstName" V="Jane"/>
+                <E T="C" N="Gender" V="2"/>
+                <E T="C" N="EthnicGroupID" V="0"/>
+                <E T="T" N="Session">
+                    <E T="R">
+                        <E T="C" N="SessionKey" V="1"/>
+                        <E T="C" N="SessionTime" V="2023-03-10 09:00:00"/>
+                        <E T="T" N="Data">
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="1"/>
+                                <E T="C" N="Age" V="43.18"/>
+                                <E T="C" N="Height" V="170.0"/>
+                                <E T="C" N="Weight" V="64.0"/>
+                                <E T="C" N="Gender" V="2"/>
+                                <E T="C" N="RefSetID" V="2015"/>
+                                <E T="C" N="BMI" V="22.15"/>
+                                <E T="C" N="Smoking" V="0"/>
+                                <E T="C" N="Temperature" V="21.0"/>
+                                <E T="C" N="Pressure" V="1015.0"/>
+                                <E T="C" N="Humidity" V="48.0"/>
+                                <E T="C" N="EthnicGroupID" V="0"/>
+                                <E T="C" N="ProtocolName" V="Pre/Post"/>
+                                <E T="C" N="SoftwareVersion" V="Medikro Spirometry Software v4.9"/>
+                                <E T="C" N="SessionTime" V="2023-03-10 09:00:00"/>
+                            </E>
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="1"/>
+                                <E T="C" N="Phase" V="Pre Phase"/>
+                                <E T="C" N="FEVC" V="3.4000"/>
+                                <E T="C" N="Rel_FEVC" V="0.93"/>
+                                <E T="C" N="Ref_FEVC" V="3.6559"/>
+                                <E T="C" N="Z_FEVC" V="-0.40"/>
+                                <E T="C" N="FEV1" V="2.8000"/>
+                                <E T="C" N="Ref_FEV1" V="2.9474"/>
+                                <E T="C" N="Z_FEV1" V="-0.30"/>
+                                <E T="C" N="FEV1FEVC_PER" V="82.35"/>
+                                <E T="C" N="Z_FEV1FEVC_PER" V="0.20"/>
+                                <E T="C" N="VEXT" V="0.045"/>
+                                <E T="C" N="FET" V="6.40"/>
+                                <E T="C" N="PEFT" V="85.0"/>
+                            </E>
+                        </E>
+                        <E T="T" N="Signal">
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="1"/>
+                                <E T="C" N="Phase" V="Pre Phase"/>
+                                <E T="C" N="Order" V="0"/>
+                                <E T="T" N="Data">
+                                    <E T="R">
+                                        <E T="C" N="TIME" V="44995.000"/>
+                                        <E T="C" N="SessionKey" V="1"/>
+                                        <E T="C" N="FEVC" V="3.4000"/>
+                                        <E T="C" N="Ref_FEVC" V="3.6559"/>
+                                        <E T="C" N="FEV1" V="2.8000"/>
+                                        <E T="C" N="PEF" V="6.70"/>
+                                        <E T="C" N="VEXT" V="0.045"/>
+                                        <E T="C" N="FET" V="6.40"/>
+                                        <E T="C" N="PEFT" V="85.0"/>
+                                        <E T="C" N="Height" V="170.0"/>
+                                        <E T="C" N="Weight" V="64.0"/>
+                                    </E>
+                                </E>
+                            </E>
+                        </E>
+                    </E>
+                    <E T="R">
+                        <E T="C" N="SessionKey" V="2"/>
+                        <E T="C" N="SessionTime" V="2024-04-22 11:30:00"/>
+                        <E T="T" N="Data">
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="2"/>
+                                <E T="C" N="Age" V="44.30"/>
+                                <E T="C" N="Height" V="170.0"/>
+                                <E T="C" N="Weight" V="65.0"/>
+                                <E T="C" N="Gender" V="2"/>
+                                <E T="C" N="RefSetID" V="2015"/>
+                                <E T="C" N="BMI" V="22.49"/>
+                                <E T="C" N="Smoking" V="0"/>
+                                <E T="C" N="Temperature" V="22.0"/>
+                                <E T="C" N="Pressure" V="1012.0"/>
+                                <E T="C" N="Humidity" V="46.0"/>
+                                <E T="C" N="EthnicGroupID" V="0"/>
+                                <E T="C" N="ProtocolName" V="Pre/Post"/>
+                                <E T="C" N="SoftwareVersion" V="Medikro Spirometry Software v4.9"/>
+                                <E T="C" N="SessionTime" V="2024-04-22 11:30:00"/>
+                            </E>
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="2"/>
+                                <E T="C" N="Phase" V="Pre Phase"/>
+                                <E T="C" N="FEVC" V="3.5000"/>
+                                <E T="C" N="Rel_FEVC" V="0.95"/>
+                                <E T="C" N="Ref_FEVC" V="3.6842"/>
+                                <E T="C" N="Z_FEVC" V="-0.30"/>
+                                <E T="C" N="FEV1" V="2.8500"/>
+                                <E T="C" N="Ref_FEV1" V="2.9688"/>
+                                <E T="C" N="Z_FEV1" V="-0.22"/>
+                                <E T="C" N="FEV1FEVC_PER" V="81.43"/>
+                                <E T="C" N="Z_FEV1FEVC_PER" V="0.10"/>
+                                <E T="C" N="VEXT" V="0.040"/>
+                                <E T="C" N="FET" V="6.50"/>
+                                <E T="C" N="PEFT" V="80.0"/>
+                            </E>
+                        </E>
+                        <E T="T" N="Signal">
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="2"/>
+                                <E T="C" N="Phase" V="Pre Phase"/>
+                                <E T="C" N="Order" V="0"/>
+                                <E T="T" N="Data">
+                                    <E T="R">
+                                        <E T="C" N="TIME" V="45404.000"/>
+                                        <E T="C" N="SessionKey" V="2"/>
+                                        <E T="C" N="FEVC" V="3.5000"/>
+                                        <E T="C" N="Ref_FEVC" V="3.6842"/>
+                                        <E T="C" N="FEV1" V="2.8500"/>
+                                        <E T="C" N="PEF" V="6.80"/>
+                                        <E T="C" N="VEXT" V="0.040"/>
+                                        <E T="C" N="FET" V="6.50"/>
+                                        <E T="C" N="PEFT" V="80.0"/>
+                                        <E T="C" N="Height" V="170.0"/>
+                                        <E T="C" N="Weight" V="65.0"/>
+                                    </E>
+                                </E>
+                            </E>
+                        </E>
+                    </E>
+                </E>
+            </E>
+        </E>
+    </E>
+</SpiroXML2>

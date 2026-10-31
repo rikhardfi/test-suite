@@ -5,3 +5,4 @@ release/
 .vite/
 *.local
 .DS_Store
+preview/

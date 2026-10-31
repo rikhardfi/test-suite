@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MetricUpdate } from '../ble/types'
 import type { AirwayLoad } from '../model/airway'
+import type { PersonalAirway } from '../model/personalAirway'
 import type { CircuitFlow } from '../model/circuit'
 import type { CriticalPowerResult } from '../model/analysis'
 import type { Athlete, Protocol } from '../model/protocol'
@@ -46,6 +47,7 @@ export interface AthleteView {
   conditions?: Environment | null
   airway?: AirwayLoad | null
   circuit?: CircuitFlow | null
+  personal?: PersonalAirway | null
 }
 
 interface Frame extends AthleteView {

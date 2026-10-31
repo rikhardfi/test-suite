@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE SpiroXML2 [<!ELEMENT SpiroXML2 (E)*><!ELEMENT E (E)*><!ATTLIST E T CDATA #REQUIRED N CDATA #IMPLIED V CDATA #IMPLIED >]>
+<!--
+  Exercise-challenge fixture. Unlike a Pre/Post bronchodilator session, an
+  exercise challenge records a pre-exercise baseline plus one best curve per
+  post-exercise time point, and Medikro does NOT prefix those later phases
+  with "Post". They therefore all reach the baseline branch of the parser.
+
+  Session 1 keeps the literal "Pre Phase" label on the baseline and labels
+  the time points in Finnish. Session 2 labels every phase by time point
+  with no "Pre Phase" anywhere, so only the timestamp ordering can identify
+  the baseline. Both sessions put the HIGHEST FVC/FEV1 on the baseline and
+  progressively lower values afterwards, which is what post-exercise
+  bronchoconstriction looks like and is why the old last-row-wins behaviour
+  under-reported baseline FVC.
+
+  Phase labels and the TIME serial format below are taken from the real
+  study exports: Pre/Post sessions run (Pre Phase, Post Phase), exercise
+  sessions run (Baseline, Control, Chall02..Chall05, Recovery).
+-->
+<SpiroXML2>
+    <E T="D">
+        <E T="T" N="Person">
+            <E T="R">
+                <E T="C" N="PersonKey" V="1"/>
+                <E T="C" N="PersonalID" V="010180-123A"/>
+                <E T="C" N="LastName" V="Doe"/>
+                <E T="C" N="FirstName" V="Jane"/>
+                <E T="C" N="Gender" V="2"/>
+                <E T="C" N="EthnicGroupID" V="0"/>
+                <E T="T" N="Session">
+                    <E T="R">
+                        <E T="C" N="SessionKey" V="1"/>
+                        <E T="C" N="SessionTime" V="2023-03-10 09:00:00"/>
+                        <E T="T" N="Data">
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="1"/>
+                                <E T="C" N="Age" V="43.18"/>
+                                <E T="C" N="Height" V="170.0"/>
+                                <E T="C" N="Weight" V="64.0"/>
+                                <E T="C" N="Gender" V="2"/>
+                                <E T="C" N="RefSetID" V="2015"/>
+                                <E T="C" N="BMI" V="22.15"/>
+                                <E T="C" N="Smoking" V="0"/>
+                                <E T="C" N="Temperature" V="21.0"/>
+                                <E T="C" N="Pressure" V="1015.0"/>
+                                <E T="C" N="Humidity" V="48.0"/>
+                                <E T="C" N="EthnicGroupID" V="0"/>
+                                <E T="C" N="ProtocolName" V="Rasitusspirometria II"/>
+                                <E T="C" N="SoftwareVersion" V="Medikro Spirometry Software v4.9"/>
+                                <E T="C" N="SessionTime" V="2023-03-10 09:00:00"/>
+                            </E>
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="1"/>
+                                <E T="C" N="Phase" V="Pre Phase"/>
+                                <E T="C" N="TIME" V="44995.377"/>
+                                <E T="C" N="FEVC" V="4.0000"/>
+                                <E T="C" N="Ref_FEVC" V="3.6559"/>
+                                <E T="C" N="Z_FEVC" V="0.55"/>
+                                <E T="C" N="FEV1" V="3.4000"/>
+                                <E T="C" N="Ref_FEV1" V="2.9474"/>
+                                <E T="C" N="FEV1FEVC_PER" V="85.00"/>
+                            </E>
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="1"/>
+                                <E T="C" N="Phase" V="Control"/>
+                                <E T="C" N="TIME" V="44995.387"/>
+                                <E T="C" N="FEVC" V="3.7000"/>
+                                <E T="C" N="Ref_FEVC" V="3.6559"/>
+                                <E T="C" N="Z_FEVC" V="0.07"/>
+                                <E T="C" N="FEV1" V="3.0000"/>
+                                <E T="C" N="Ref_FEV1" V="2.9474"/>
+                                <E T="C" N="FEV1FEVC_PER" V="81.08"/>
+                            </E>
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="1"/>
+                                <E T="C" N="Phase" V="Chall03"/>
+                                <E T="C" N="TIME" V="44995.437"/>
+                                <E T="C" N="FEVC" V="3.5000"/>
+                                <E T="C" N="Ref_FEVC" V="3.6559"/>
+                                <E T="C" N="Z_FEVC" V="-0.25"/>
+                                <E T="C" N="FEV1" V="2.8000"/>
+                                <E T="C" N="Ref_FEV1" V="2.9474"/>
+                                <E T="C" N="FEV1FEVC_PER" V="80.00"/>
+                            </E>
+                        </E>
+                    </E>
+                    <E T="R">
+                        <E T="C" N="SessionKey" V="2"/>
+                        <E T="C" N="SessionTime" V="2024-04-22 11:30:00"/>
+                        <E T="T" N="Data">
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="2"/>
+                                <E T="C" N="Age" V="44.30"/>
+                                <E T="C" N="Height" V="170.0"/>
+                                <E T="C" N="Weight" V="65.0"/>
+                                <E T="C" N="Gender" V="2"/>
+                                <E T="C" N="RefSetID" V="2015"/>
+                                <E T="C" N="BMI" V="22.49"/>
+                                <E T="C" N="Smoking" V="0"/>
+                                <E T="C" N="Temperature" V="22.0"/>
+                                <E T="C" N="Pressure" V="1012.0"/>
+                                <E T="C" N="Humidity" V="46.0"/>
+                                <E T="C" N="EthnicGroupID" V="0"/>
+                                <E T="C" N="ProtocolName" V="RASITUSSPIROMETRIA"/>
+                                <E T="C" N="SoftwareVersion" V="Medikro Spirometry Software v4.0"/>
+                                <E T="C" N="SessionTime" V="2024-04-22 11:30:00"/>
+                            </E>
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="2"/>
+                                <E T="C" N="Phase" V="Baseline"/>
+                                <E T="C" N="TIME" V="45404.483"/>
+                                <E T="C" N="FEVC" V="4.1000"/>
+                                <E T="C" N="Ref_FEVC" V="3.6842"/>
+                                <E T="C" N="Z_FEVC" V="0.66"/>
+                                <E T="C" N="FEV1" V="3.5000"/>
+                                <E T="C" N="Ref_FEV1" V="2.9688"/>
+                                <E T="C" N="FEV1FEVC_PER" V="85.37"/>
+                            </E>
+                            <E T="R">
+                                <E T="C" N="SessionKey" V="2"/>
+                                <E T="C" N="Phase" V="Chall02"/>
+                                <E T="C" N="TIME" V="45404.499"/>
+                                <E T="C" N="FEVC" V="3.6000"/>
+                                <E T="C" N="Ref_FEVC" V="3.6842"/>
+                                <E T="C" N="Z_FEVC" V="-0.14"/>
+                                <E T="C" N="FEV1" V="2.9000"/>
+                                <E T="C" N="Ref_FEV1" V="2.9688"/>
+                                <E T="C" N="FEV1FEVC_PER" V="80.56"/>
+                            </E>
+                        </E>
+                    </E>
+                </E>
+            </E>
+        </E>
+    </E>
+</SpiroXML2>

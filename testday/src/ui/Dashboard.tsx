@@ -20,6 +20,8 @@ import type { RecorderStatus } from '../model/recorder'
 import type { SensorManager } from '../ble/manager'
 import { FLOW_METER_ID, type FlowMeterDevice } from '../ble/flowMeter'
 import { airwayLoad } from '../model/airway'
+import { personalAirway } from '../model/personalAirway'
+import { AirwayCurve } from './AirwayCurve'
 import { Modal } from './Modal'
 
 /** Where the two dashboard dividers sit, as a percentage of the grid. */
@@ -268,7 +270,33 @@ export function Dashboard({
         })
       : null
 
+  // The athlete's own Karamaoun curve: TSI VE primary, heart-rate VE beside it.
+  const livePersonal = personalAirway({
+    lungs: athlete.lungs,
+    hrVeCurve: athlete.hrVeCurve,
+    room,
+    pressurePa: pressurePa({ metrics, conditions }),
+    tsiVeLMin: airway?.veLMin ?? null,
+    heartRate: metrics.heartRate ?? null,
+    exhalations: flowMeter?.exhalations,
+    tsiNow: breathsTo ?? undefined,
+    since: snapshot.startedAt ?? undefined,
+    samples,
+  })
+  // Between mask-on bouts the TSI half is held at its last value and labelled
+  // with its age, so the panel does not blank for the minutes the mask is off.
+  const lastTsi = useRef<{ tsi: NonNullable<NonNullable<typeof livePersonal>['tsi']>; at: number } | null>(null)
+  if (livePersonal?.tsi && breathsTo != null) lastTsi.current = { tsi: livePersonal.tsi, at: breathsTo }
+  const personal =
+    livePersonal && !livePersonal.tsi && lastTsi.current
+      ? { ...livePersonal, tsi: { ...lastTsi.current.tsi, heldS: (Date.now() - lastTsi.current.at) / 1000 } }
+      : livePersonal
+
+  /** Top-right panel: the duration curve or the airway curve, remembered while the app runs. */
+  const [topRight, setTopRight] = useState<'curve' | 'airway'>('curve')
+
   const tileContext: TileContext = {
+    personal,
     metrics,
     snapshot,
     athlete,
@@ -317,7 +345,7 @@ export function Dashboard({
     [frontTiles, protocol.sport],
   )
   useAthleteFeed(
-    { protocol, athlete, snapshot, metrics, tiles: shownTiles, fitY, cp, rr, conditions, airway, circuit: tileContext.circuit },
+    { protocol, athlete, snapshot, metrics, tiles: shownTiles, fitY, cp, rr, conditions, airway, circuit: tileContext.circuit, personal },
     samples,
   )
 
@@ -464,11 +492,27 @@ export function Dashboard({
       </section>
 
       <section className="panel mmp-panel">
-        {protocol.sport === 'bike' ? (
+        {topRight === 'airway' ? (
+          <>
+            <div className="panel-head">
+              <span className="muted">
+                Airway flux by generation (Karamaoun 2022 Fig 2) · VE{' '}
+                {personal?.tsi ? `${personal.tsi.veLMin.toFixed(0)} TSI` : '– TSI'} /{' '}
+                {personal?.hr ? `${personal.hr.veLMin.toFixed(0)} HR` : '– HR'} L/min
+              </span>
+              <span className="spacer" />
+              <TopRightToggle value={topRight} onChange={setTopRight} sport={protocol.sport} />
+            </div>
+            <ErrorBoundary label="Airway curve">
+              <AirwayCurve personal={personal} />
+            </ErrorBoundary>
+          </>
+        ) : protocol.sport === 'bike' ? (
           <>
             <div className="panel-head">
               <span className="muted">Live MMP curve (watt)</span>
               <span className="spacer" />
+              <TopRightToggle value={topRight} onChange={setTopRight} sport={protocol.sport} />
               <YAxisToggle fitY={fitY} onChange={onFitYChange} />
             </div>
             <ErrorBoundary label="MMP curve">
@@ -482,6 +526,7 @@ export function Dashboard({
                 {runView === 'nomogram' ? 'Pace · gradient · VO₂' : 'Flat-equivalent speed (km/h)'}
               </span>
               <span className="spacer" />
+              <TopRightToggle value={topRight} onChange={setTopRight} sport={protocol.sport} />
               <YAxisToggle fitY={fitY} onChange={onFitYChange} />
               <div className="segmented small">
                 <button
@@ -619,6 +664,32 @@ export function Dashboard({
  * and it offers the two ways out: stop the machine, or start the test that
  * should have been running.
  */
+/** Top-right panel: the sport's own curve, or the athlete's airway curve. */
+function TopRightToggle({
+  value,
+  onChange,
+  sport,
+}: {
+  value: 'curve' | 'airway'
+  onChange: (value: 'curve' | 'airway') => void
+  sport: string
+}) {
+  return (
+    <div className="segmented small">
+      <button className={value === 'curve' ? 'on' : 'ghost'} onClick={() => onChange('curve')}>
+        {sport === 'bike' ? 'MMP' : 'Run'}
+      </button>
+      <button
+        className={value === 'airway' ? 'on' : 'ghost'}
+        onClick={() => onChange('airway')}
+        title="The athlete's own Karamaoun 2022 Fig 2: airway evaporation flux by generation at the current VE"
+      >
+        Airway
+      </button>
+    </div>
+  )
+}
+
 /**
  * One switch, shown on every chart it moves. From zero a chart shows
  * proportion; fitted, it shows the differences. Both are true, and the button

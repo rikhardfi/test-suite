@@ -5,7 +5,8 @@ import { CORE_QUALITY } from '../ble/parse'
 import type { Athlete, Protocol } from '../model/protocol'
 import type { Environment, RunnerSnapshot, Sample } from '../model/session'
 import { waterContentOf } from '../model/humidity'
-import { karamaounThresholdLMin, type AirwayLoad, type Room } from '../model/airway'
+import { type AirwayLoad, type Room } from '../model/airway'
+import type { PersonalAirway } from '../model/personalAirway'
 import type { CircuitFlow } from '../model/circuit'
 import type { MetricUpdate } from '../ble/types'
 
@@ -37,6 +38,8 @@ export interface TileContext {
   airway?: AirwayLoad | null
   /** Fan or dryer flow detected on the TSI circuit, which is not breath. */
   circuit?: CircuitFlow | null
+  /** The athlete's own Karamaoun curve and thresholds, when spirometry is imported. */
+  personal?: PersonalAirway | null
 }
 
 /** In place of a breath figure while the circuit carries a fan or dryer. */
@@ -545,22 +548,23 @@ export const TILES: readonly TileDef[] = [
     label: 'Karamaoun',
     tone: 'vo2',
     about:
-      'Minute ventilation as a share of the Karamaoun threshold: the VE above which the tracheal surface liquid is modelled to dry (85 L/min at 19 °C and 55 %, Karamaoun et al. 2022), moved to the room\'s air by its water flux, as the ventilation project does. VE is the last 30 s of TSI exhalations at BTPS, or the ventilation wearable when the TSI is not in use. The second line gives the threshold and the minutes above it since the test started, counted from the TSI only. The threshold comes from a model resting on a small literature, not from a measurement in this athlete.',
+      "Minute ventilation as a share of this athlete's own Karamaoun threshold: the VE at which the airway evaporation flux of Karamaoun et al. 2022 (Fig 2), interpolated to the athlete's FRC (GLI 2021 from the imported spirometry), reaches the top of the gland-replenishment band, 0.35 × 10⁻³ µL mm⁻² s⁻¹. Moved to the room's air two ways, both shown: the Haut 2021 model's per-generation ratio (colder air raises it) and the water deficit (colder air lowers it). VE is the last 30 s of TSI exhalations at BTPS; the second line gives the VE predicted from heart rate on the athlete's imported HR–VE curve, and the minutes above each threshold. The band is gland physiology, not an injury threshold, and cc16 was only ever measured in room air. Needs imported spirometry and room temperature and humidity.",
     compute: (c) => {
-      const room = roomAir(c)
-      if (!room) return null
-      const a = c.airway
-      const threshold = a?.karamaoun.thresholdLMin ?? karamaounThresholdLMin(room.tempC, room.humidityPct, pressurePa(c))
-      const ve = a?.veLMin ?? c.metrics.ventilationLMin
-      const minutes = a?.karamaoun.minutesAbove
-      const parts = [Number.isFinite(threshold) ? `of ${threshold.toFixed(0)} L/min` : 'unreachable in this air']
-      if (minutes != null) parts.push(`${minutes.toFixed(1)} min above`)
-      if (ve == null) return { value: Number.isFinite(threshold) ? threshold.toFixed(0) : '–', unit: 'L/min', note: 'threshold · no VE' }
-      if (!a) parts.push('wearable')
+      const pa = c.personal
+      if (!pa) return null
+      const [hs, wd] = [pa.threshold.hautShifted[1], pa.threshold.waterDeficit[1]]
+      const fmt = (v: number) => (Number.isFinite(v) ? v.toFixed(0) : '∞')
+      const parts = [`Haut ${fmt(hs)} · water ${fmt(wd)} L/min`]
+      if (pa.tsi?.minutesAbove) parts.push(`TSI ${pa.tsi.minutesAbove[0].toFixed(1)} / ${pa.tsi.minutesAbove[1].toFixed(1)} min above`)
+      if (pa.hr) parts.push(`HR ${pa.hr.veLMin.toFixed(0)} L/min, ${pa.hr.minutesAbove[0].toFixed(1)} / ${pa.hr.minutesAbove[1].toFixed(1)} min`)
+      const onMeter = onCircuit(c)
+      if (onMeter) return onMeter
+      if (!pa.tsi) return { value: '–', note: parts.join(' · ') }
       return {
-        value: Number.isFinite(threshold) ? ((100 * ve) / threshold).toFixed(0) : '0',
+        value: Number.isFinite(hs) ? ((100 * pa.tsi.veLMin) / hs).toFixed(0) : '0',
         unit: '%',
-        note: parts.join(' · '),
+        note: pa.tsi.heldS != null ? `held ${Math.round(pa.tsi.heldS / 60)} min · ${parts.join(' · ')}` : parts.join(' · '),
+        suspect: pa.tsi.curve.extrapolated || pa.tsi.heldS != null,
       }
     },
   },

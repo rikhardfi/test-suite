@@ -203,9 +203,18 @@ temperature and humidity are known (from the monitor or under Conditions):
 
 - *Energy lost*: kJ/h, sensible plus latent, that the exhaled air carries beyond the room air breathed in, with water in g/h.
 - *Airway recovered*: kJ/h. This is what bringing that room air to 37 °C and saturation costs, minus what is still in the exhaled air; the second line gives it as a share of that demand.
-- *Karamaoun*: VE as a percentage of the threshold above which the tracheal surface liquid is modelled to dry (85 L/min at 19 °C and 55 %, Karamaoun et al. 2022, moved to the room's air by its water flux). The second line gives the threshold and the minutes above it since the test started. VE is TSI at BTPS; the ventilation wearable stands in when the TSI is not in use, but time above is counted from the TSI only.
+- *Karamaoun*: VE as a percentage of the athlete's own threshold, the VE at which the airway evaporation flux of Karamaoun et al. 2022 (Fig 2), interpolated to the athlete's FRC, reaches the top of the gland-replenishment band (0.35 × 10⁻³ µL mm⁻² s⁻¹). The threshold is moved to the room's air in two ways, and both are shown. The Haut 2021 model's per-generation ratio makes colder air raise it. The water deficit makes colder air lower it. The second line gives both thresholds, minutes above each by TSI, and the VE predicted from heart rate with its own minutes above. Between mask-on bouts the TSI value is held and labelled with its age. Needs imported spirometry.
 
-All three use the last 30 s of exhalations. They stay blank until the meter has 30 s of breaths, and
+**Airway panel.** The top-right panel toggles between the MMP (or run) curve and **Airway**, which shows the athlete's own Figure 2: flux per generation at the current TSI VE (bold cyan: Karamaoun's figure moved to this FRC and room; dashed: the Haut 2021 model on the same FRC), at the heart-rate VE (pink), and at the two thresholds (faint), against the band. It needs two imports under Settings → Athlete → Airway model:
+
+- a Medikro spirometry XML (height, sex and age; FRC from GLI 2021 static volumes, Hall et al. 2021, unless a measured FRC is entered), and
+- the ventilation project's `config/athletes/<ID>.yml` (the newest dated HR–VE curve).
+
+The model (`src/model/karamaoun.ts`) ports `R/karamaoun_fig2.R` and the Haut solver in `R/haut_complete.R`, and `karamaoun.test.ts` pins values computed by that R code. The band is gland physiology, not an injury threshold, and cc16 was only measured in room air.
+
+**Flow direction from temperature.** The TSI lost its flow sign in all three sessions so far, so live breath detection always takes the direction from the gas temperature (`directionFromTemperature()`, a port of `tsi_direction_from_temperature()`). Where the temperature does not swing, the meter's sign is kept. Replayed through the live code, the 2026-10-31 session gives the same 263 breaths as the R pipeline.
+
+The three tiles use the last 30 s of exhalations. They stay blank until the meter has 30 s of breaths, and
 for as long as nobody has breathed into it for 10 s. The exhalations are found live in the recording
 process (`src/model/breaths.ts`), using the same gates and the same 50 to 90 % plateau as `tsi_segments()`
 and `tsi_breath_energy()`. The physics in `src/model/airway.ts` matches `R/tsi.R`,

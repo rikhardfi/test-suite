@@ -1,3 +1,4 @@
+import type { HrVeCurve, LungProfile } from './lungProfile'
 import { solveSpeedForVo2 } from './vo2'
 
 export type Sport = 'bike' | 'run'
@@ -68,6 +69,10 @@ export interface Athlete {
   economyPct?: number
   /** Measured VO₂max, when there is one, for expressing targets as a share of it. */
   vo2maxMlKgMin?: number
+  /** From a Medikro spirometry export; gives the FRC for the airway model. */
+  lungs?: LungProfile
+  /** From the ventilation project's athlete config; predicts VE from heart rate. */
+  hrVeCurve?: HrVeCurve
 }
 
 export const DEFAULT_ATHLETE: Athlete = {

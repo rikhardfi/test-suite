@@ -11,7 +11,7 @@ import type {
   SegmentStart,
 } from '../../src/model/flow'
 import { BREATH_WINDOW_S } from '../../src/model/flow'
-import { exhalations, type FlowRows } from '../../src/model/breaths'
+import { directionFromTemperature, exhalations, type FlowRows } from '../../src/model/breaths'
 import { detectCircuit, type CircuitState } from '../../src/model/circuit'
 import { LineSplitter, SEGMENT_MS, TSI_PORT, cmd, meterCandidates, parseLine, type TsiRow } from './protocol'
 import { SegmentClock, gapSamples, gapVolumeL, preciseNow } from './timing'
@@ -580,8 +580,11 @@ export class TsiMeter {
     const max = Math.round((BREATH_WINDOW_S * 1000) / dt)
     const from = Math.max(0, r.f.length - max)
     const t0 = r.lastAt - (r.f.length - 1 - from) * dt
+    // Direction from the gas temperature, always (RMH 2026-10-31): the meter
+    // lost its flow sign in all three TSI sessions, and where the temperature
+    // does not swing the meter's own sign is kept.
     const rows: FlowRows = {
-      flow: r.f.slice(from),
+      flow: directionFromTemperature(r.f.slice(from), r.tc.slice(from), dt / 1000),
       tempC: r.tc.slice(from),
       rhPct: r.rh.slice(from),
       pressureKpa: r.p.slice(from),

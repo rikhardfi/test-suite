@@ -102,6 +102,82 @@ interface Segment {
 }
 
 /**
+ * `tsi_direction_from_temperature()` in the ventilation project (`R/tsi.R`),
+ * line for line: |flow| with the direction taken from the gas temperature, for
+ * a meter whose direction sensor has failed (2026-10-02, 2026-10-31). A rise of
+ * at least `minSwingC` to a peak is an exhalation, a fall as large to a trough
+ * an inspiration; each phase starts at the lowest |flow| in the `searchS`
+ * before (to `afterS` after) the temperature's halfway crossing. Phases longer
+ * than `maxPhaseS`, or with gas above `maxExhaledC` (the hair dryer), and
+ * stretches where the temperature does not swing keep the meter's sign. Needs
+ * inspired air clearly colder than exhaled. NaN flow stays NaN.
+ */
+export function directionFromTemperature(
+  flow: readonly number[],
+  tempC: readonly number[],
+  dtS: number,
+  { minSwingC = 3, searchS = 0.6, afterS = 0.05, maxPhaseS = 8, maxExhaledC = 38 } = {},
+): number[] {
+  const n = flow.length
+  const out = flow.slice()
+  const first = tempC.findIndex(Number.isFinite)
+  if (n < 3 || first < 0) return out
+  const t = tempC.slice()
+  for (let i = 0; i < first; i++) t[i] = t[first]
+  for (let i = first + 1; i < n; i++) if (!Number.isFinite(t[i])) t[i] = t[i - 1]
+
+  const extI: number[] = []
+  const extK: number[] = []
+  let hi = 0, lo = 0, seeking = 0
+  for (let i = 1; i < n; i++) {
+    if (t[i] > t[hi]) hi = i
+    if (t[i] < t[lo]) lo = i
+    if (seeking >= 0 && t[i] <= t[hi] - minSwingC) {
+      if (seeking === 1) { extI.push(hi); extK.push(1) }
+      seeking = -1
+      lo = i
+    } else if (seeking <= 0 && t[i] >= t[lo] + minSwingC) {
+      if (seeking === -1) { extI.push(lo); extK.push(-1) }
+      seeking = 1
+      hi = i
+    }
+  }
+  if (extI.length < 2) return out
+
+  const back = Math.round(searchS / dtS)
+  const fwd = Math.round(afterS / dtS)
+  const m = extI.length - 1
+  const bnd = new Array<number>(m)
+  const dir = extK.slice(0, -1).map((k) => -k)
+  for (let j = 0; j < m; j++) {
+    const e0 = extI[j], e1 = extI[j + 1]
+    const mid = (t[e0] + t[e1]) / 2
+    let cross = e0
+    for (let i = e0; i <= e1; i++) {
+      if (dir[j] > 0 ? t[i] >= mid : t[i] <= mid) { cross = i; break }
+    }
+    const w0 = Math.max(0, cross - back, j > 0 ? bnd[j - 1] + 1 : 0)
+    const w1 = Math.min(n - 1, cross + fwd)
+    let best = cross, bestV = Infinity
+    for (let i = w0; i <= w1; i++) {
+      const v = Math.abs(flow[i])
+      if (Number.isFinite(v) && v < bestV) { bestV = v; best = i }
+    }
+    bnd[j] = best
+  }
+  const maxLen = Math.round(maxPhaseS / dtS)
+  for (let j = 0; j < m - 1; j++) {
+    const i0 = bnd[j], i1 = bnd[j + 1] - 1
+    if (i1 < i0 || i1 - i0 + 1 > maxLen) continue
+    let hot = false
+    for (let i = i0; i <= i1; i++) if (t[i] > maxExhaledC) { hot = true; break }
+    if (hot) continue
+    for (let i = i0; i <= i1; i++) out[i] = dir[j] * Math.abs(flow[i])
+  }
+  return out
+}
+
+/**
  * Exhalations in the rows, excluding any that touch the first or last row and
  * any too long or too large to be a breath (`tsi_report.R`'s `plausible`).
  */

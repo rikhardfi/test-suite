@@ -134,6 +134,16 @@ export function Analysis({
             return [picked.message, ...imported.problems.filter((p) => p !== picked.message)].join(' ')
           }}
           onDelete={async () => {
+            const when = new Date(session.startedAt).toLocaleString(undefined, {
+              dateStyle: 'short',
+              timeStyle: 'short',
+            })
+            const length = formatClock(sessions.find((s) => s.id === session.id)?.sampleCount ?? 0)
+            const sure = window.confirm(
+              `Remove "${session.protocolName}" (${when}, ${length}) from the list?\n\n` +
+                'The files are kept in the discarded folder, but the session is no longer shown here.',
+            )
+            if (!sure) return
             await recorder.discard(session.id)
             setSelectedId(null)
             setSession(null)

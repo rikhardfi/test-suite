@@ -2,6 +2,7 @@ import type { Lap, SessionRecord, Sample } from './session'
 import type { Protocol } from './protocol'
 import { computeKcal } from './vo2'
 import { max, mean } from './metrics'
+import { sessionFilename } from './export'
 
 /**
  * A FIT encoder, written here rather than taken from a package.
@@ -918,11 +919,7 @@ function versionNumber(version: string): number {
   return Number(major) * 100 + Number(minor)
 }
 
+/** Named like every other export, by the local start time. */
 export function fitFilename(session: SessionRecord): string {
-  const date = new Date(session.startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-')
-  const slug = session.protocolName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-  return `${date}_${slug || 'test'}.fit`
+  return sessionFilename(session, 'fit')
 }

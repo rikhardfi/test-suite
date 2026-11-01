@@ -7,6 +7,7 @@ import type { Environment, RunnerSnapshot, Sample } from '../model/session'
 import { waterContentOf } from '../model/humidity'
 import { type AirwayLoad, type Room } from '../model/airway'
 import type { PersonalAirway } from '../model/personalAirway'
+import type { WaterTrend } from '../model/waterTrend'
 import type { CircuitFlow } from '../model/circuit'
 import type { MetricUpdate } from '../ble/types'
 
@@ -40,6 +41,8 @@ export interface TileContext {
   circuit?: CircuitFlow | null
   /** The athlete's own Karamaoun curve and thresholds, when spirometry is imported. */
   personal?: PersonalAirway | null
+  /** Exhaled water content over the last minute of TSI exhalations, and its pace. */
+  waterTrend?: WaterTrend | null
 }
 
 /** In place of a breath figure while the circuit carries a fan or dryer. */
@@ -508,6 +511,25 @@ export const TILES: readonly TileDef[] = [
       "The flow meter's running volume since it was last reset (Sensors → TSI flow meter → Reset volume), Std L.",
     compute: (c) =>
       c.metrics.expTotalL == null ? null : { value: c.metrics.expTotalL.toFixed(1), unit: 'L', note: 'since reset' },
+  },
+  {
+    key: 'expWater',
+    label: 'Exhaled water',
+    tone: 'vo2',
+    about:
+      'Absolute humidity of the exhaled plateau, per breath, fitted over the last minute of TSI exhalations: the level now, its pace in g/m³ per minute, and how long the bout would have to go on at that pace for the meter to read 90 % RH at the exhaled gas temperature. The sensor settles over minutes, so a rising reading is the sensor catching up, not the airway changing. A straight line runs ahead of a reading that is slowing, so the time is a lower bound. Needs at least five breaths over 20 s.',
+    compute: (c) => {
+      const w = c.waterTrend
+      if (!w) return onCircuit(c)
+      const pace = `${w.slopeMgLPerMin >= 0 ? '+' : ''}${w.slopeMgLPerMin.toFixed(1)} g/m³/min`
+      const eta =
+        w.toTargetS === 0
+          ? '90 % RH reached'
+          : w.toTargetS == null
+            ? 'not rising'
+            : `90 % RH in ${formatClock(Math.round(w.toTargetS))}`
+      return { value: w.levelMgL.toFixed(1), unit: 'g/m³', note: `${pace} · ${eta}`, suspect: c.circuit != null }
+    },
   },
   {
     key: 'energyLost',

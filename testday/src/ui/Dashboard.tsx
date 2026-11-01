@@ -20,6 +20,7 @@ import type { RecorderStatus } from '../model/recorder'
 import type { SensorManager } from '../ble/manager'
 import { FLOW_METER_ID, type FlowMeterDevice } from '../ble/flowMeter'
 import { airwayLoad } from '../model/airway'
+import { waterTrend } from '../model/waterTrend'
 import { personalAirway } from '../model/personalAirway'
 import { AirwayCurve } from './AirwayCurve'
 import { Modal } from './Modal'
@@ -307,6 +308,7 @@ export function Dashboard({
     conditions,
     airway,
     circuit: flowMeter?.status?.circuit?.kind ?? null,
+    waterTrend: flowMeter && breathsTo != null ? waterTrend(flowMeter.exhalations, breathsTo) : null,
   }
 
   /**

@@ -244,3 +244,26 @@ describe('rolling averages', () => {
     expect(compute('rollHr', context({ samples }))).toBeNull()
   })
 })
+
+describe('the exhaled water tile', () => {
+  const trend = { levelMgL: 18.04, slopeMgLPerMin: 3, targetMgL: 30.3, tempC: 32, breaths: 12 }
+
+  it('shows the level, the pace and the time to 90 % RH', () => {
+    const v = compute('expWater', context({ waterTrend: { ...trend, toTargetS: 246 } }))!
+    expect(v.value).toBe('18.0')
+    expect(v.unit).toBe('g/m³')
+    expect(v.note).toBe('+3.0 g/m³/min · 90 % RH in 4:06')
+  })
+
+  it('says so when the reading is flat or already there', () => {
+    expect(compute('expWater', context({ waterTrend: { ...trend, slopeMgLPerMin: -0.2, toTargetS: null } }))!.note).toBe(
+      '-0.2 g/m³/min · not rising',
+    )
+    expect(compute('expWater', context({ waterTrend: { ...trend, toTargetS: 0 } }))!.note).toContain('90 % RH reached')
+  })
+
+  it('stays blank without breaths, and names a fan on the circuit', () => {
+    expect(compute('expWater', context())).toBeNull()
+    expect(compute('expWater', context({ circuit: 'fan' }))!.note).toContain('fan on the circuit')
+  })
+})
